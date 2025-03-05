@@ -9,16 +9,14 @@ version = "1.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
-    mavenLocal()
-    maven("https://raw.githubusercontent.com/OpenRune/hosting/snapshot")
+    maven("https://raw.githubusercontent.com/OpenRune/hosting/master")
 }
 
 dependencies {
     testImplementation(kotlin("test"))
     implementation("io.ktor:ktor-server-core:2.3.2")
 
-    implementation("dev.openrune:filestore:1.3.82")
-    implementation("dev.openrune:filestore-tools:1.3.83")
+    implementation("dev.or2:all:2.0.0")
     // https://mvnrepository.com/artifact/it.unimi.dsi/fastutil
     implementation("it.unimi.dsi:fastutil:8.5.14")
 

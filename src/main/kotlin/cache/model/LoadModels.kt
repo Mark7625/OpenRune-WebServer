@@ -1,13 +1,12 @@
-import cache.model.ModelDefinition
-import cache.model.ModelLoader
+
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import dev.openrune.cache.CacheManager
 import dev.openrune.cache.MODELS
-import dev.openrune.cache.filestore.definition.data.ItemType
-import dev.openrune.cache.filestore.definition.data.NpcType
-import dev.openrune.cache.filestore.definition.data.ObjectType
+import dev.openrune.definition.type.ItemType
+import dev.openrune.definition.type.NpcType
+import dev.openrune.definition.type.ObjectType
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
@@ -75,13 +74,9 @@ object LoadModels {
         val objectCache = CacheManager.getObjects()
         val itemCache = CacheManager.getItems()
 
-        var bytes: MutableMap<Int, ByteArray> = CacheManager.cache.archives(MODELS).associateWith { archive ->
-            CacheManager.cache.data(MODELS, archive)!!
-        }.toMutableMap()
-
         // Launching coroutines to process archives concurrently
         runBlocking {
-            val archives = CacheManager.cache.archives(MODELS)
+            val archives = gameCache.archives(MODELS)
             val totalArchives = archives.size
             var processedCount = 0
 
@@ -90,7 +85,7 @@ object LoadModels {
             archives.map { archive ->
                 launch(Dispatchers.IO) {
                     try {
-                        val model = ModelLoader(bytes[archive]!!, archive).get()
+                        val model = modelDecoder.getModel(archive)
                         val attachments = ModelAttachments(
                             items = mutableListOf(),
                             objects = mutableListOf(),
@@ -99,10 +94,10 @@ object LoadModels {
 
                         // Populate model data
                         models[archive] = ModelData(
-                            totalFaces = model.faceCount,
+                            totalFaces = model!!.triangleCount,
                             totalVerts = model.vertexCount,
-                            textures = model.faceTextures?.map { it.toInt() and 0xFFFF }?.toSet()?.toIntArray() ?: intArrayOf(),
-                            colors = model.faceColors?.map { it.toInt() and 0xFFFF }?.toSet()?.toIntArray() ?: intArrayOf(),
+                            textures = model.triangleTextures?.map { it and 0xFFFF }?.toSet()?.toIntArray() ?: intArrayOf(),
+                            colors = model.triangleColors?.map { it.toInt() and 0xFFFF }?.toSet()?.toIntArray() ?: intArrayOf(),
                             attachments = attachments
                         )
 
@@ -129,7 +124,6 @@ object LoadModels {
 
             println("\nProcessing complete!")
         }
-        bytes = emptyMap<Int,ByteArray>().toMutableMap()
         manifest.writeText(GsonBuilder().setPrettyPrinting().create().toJson(models))
     }
 

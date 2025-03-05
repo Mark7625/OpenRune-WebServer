@@ -17,11 +17,11 @@ object TextureHandler {
         val imageFormat = call.request.queryParameters["image"]
 
         if (id == null) {
-            call.respondText(json.toJson(TextureManager.cache.values))
+            call.respondText(json.toJson(TextureManager.textureCache.values))
             return
         }
 
-        val texture = TextureManager.cache[id]
+        val texture = TextureManager.textureCache[id]
         if (texture == null) {
             call.respond(HttpStatusCode.NotFound, "Texture not found")
             return

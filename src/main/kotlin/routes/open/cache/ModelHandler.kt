@@ -1,21 +1,10 @@
 package routes.open.cache
 
 import LoadModels
-import com.github.benmanes.caffeine.cache.Caffeine
-import com.github.benmanes.caffeine.cache.LoadingCache
-import dev.openrune.cache.CacheManager
-import dev.openrune.game.item.ItemSpriteBuilder
 import io.ktor.http.*
 import io.ktor.server.application.*
-import io.ktor.server.request.*
 import io.ktor.server.response.*
-import kotlinx.coroutines.runBlocking
 import routes.open.cache.TextureHandler.json
-import java.awt.image.BufferedImage
-import java.io.ByteArrayOutputStream
-import java.util.concurrent.TimeUnit
-import javax.imageio.ImageIO
-
 
 object ModelHandler {
 

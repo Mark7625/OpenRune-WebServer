@@ -3,12 +3,14 @@ package routes.open.cache
 import com.github.benmanes.caffeine.cache.Caffeine
 import com.github.benmanes.caffeine.cache.LoadingCache
 import dev.openrune.cache.CacheManager
-import dev.openrune.cache.filestore.definition.data.ItemType
-import dev.openrune.game.item.ItemSpriteBuilder
+import dev.openrune.cache.tools.item.ItemSpriteBuilder
+import dev.openrune.cache.tools.item.ItemSpriteFactory
+import dev.openrune.definition.type.ItemType
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.request.*
 import io.ktor.server.response.*
+import itemSpriteFactory
 import kotlinx.coroutines.runBlocking
 import routes.open.cache.TextureHandler.json
 import java.awt.image.BufferedImage
@@ -88,13 +90,10 @@ object ItemHandler {
 
     private fun fetchImageWithKey(key: String): BufferedImage {
         val params = parseCacheKey(key)
-        val itemSpriteBuilder = ItemSpriteBuilder(params.id)
+        val itemSpriteBuilder = ItemSpriteBuilder(itemSpriteFactory!!,params.id)
             .quantity(params.quantity)
-            .width(params.width)
-            .height(params.height)
             .border(params.border)
             .shadowColor(params.shadowColor)
-            .noted(params.isNoted)
             .xan2d(params.xan2d)
             .yan2d(params.yan2d)
             .zan2d(params.zan2d)
@@ -102,7 +101,7 @@ object ItemHandler {
             .xOffset2d(params.xOffset2d)
             .yOffset2d(params.yOffset2d)
 
-        return itemSpriteBuilder.build()
+        return itemSpriteBuilder.create()!!
     }
 
     private fun parseParameters(call: ApplicationCall, id: Int): IconParams {

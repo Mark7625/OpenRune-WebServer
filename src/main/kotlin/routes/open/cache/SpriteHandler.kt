@@ -1,5 +1,4 @@
 
-import cache.texture.TextureManager
 import io.ktor.http.*
 import kotlinx.coroutines.runBlocking
 import java.awt.image.BufferedImage
@@ -10,11 +9,8 @@ import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 import com.github.benmanes.caffeine.cache.Caffeine
 import com.github.benmanes.caffeine.cache.LoadingCache
-import dev.openrune.cache.CacheManager
-import dev.openrune.cache.SPRITES
-import dev.openrune.cache.filestore.definition.data.SpriteType
-import dev.openrune.cache.filestore.definition.decoder.SpriteDecoder
-import dev.openrune.cache.tools.tasks.impl.sprites.SpriteSet
+import dev.openrune.cache.filestore.definition.SpriteDecoder
+import dev.openrune.definition.type.SpriteType
 import io.ktor.server.application.*
 import io.ktor.server.response.*
 import routes.open.cache.TextureHandler.json
@@ -40,11 +36,10 @@ object SpriteHandler {
 
     fun init() {
 
-        sprites.putAll(SpriteDecoder().load(CacheManager.cache))
+        SpriteDecoder().load(gameCache, sprites)
 
         sprites.forEach { sprite ->
-            val size = sprites.size
-            sprite.value.sprites!!.forEach { subSprite ->
+            sprite.value.sprites.forEach { subSprite ->
                 if (allSprites.count { it.id == sprite.key } == 0) {
                     allSprites.add(SpriteInfo(sprite.key,-1,subSprite.offsetX,subSprite.offsetY))
                 }
@@ -76,19 +71,21 @@ object SpriteHandler {
         }
     }
 
-    // Method to parse key, decode the image, and resize if necessary
     private fun fetchImageWithKey(key: String): BufferedImage {
-        // Parse the key to get id, width, height, and aspectRatio
         val (idStr, widthStr, heightStr, aspectRatioStr) = key.split(":")
         val id = idStr.toInt()
         val width = widthStr.toIntOrNull()
         val height = heightStr.toIntOrNull()
         val keepAspectRatio = aspectRatioStr.toBoolean()
 
-        val originalImage = sprites[id]!!.toSprite()
+        val originalImage = sprites[id]!!.getSprite(true)
 
         return if (width != null && height != null) {
-            resizeImage(originalImage, width, height, keepAspectRatio)
+            try {
+                resizeImage(originalImage, width, height, keepAspectRatio)
+            }catch (e : Exception) {
+                originalImage
+            }
         } else {
             originalImage
         }

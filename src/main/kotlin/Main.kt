@@ -1,15 +1,16 @@
 
-import cache.map.MapImageDumper
 import cache.texture.TextureManager
 import com.auth0.jwt.JWT
 import com.auth0.jwt.algorithms.Algorithm
 import com.google.gson.Gson
 import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
+import dev.openrune.OsrsCacheProvider
 import dev.openrune.cache.CacheManager
-import dev.openrune.cache.MODELS
+import dev.openrune.cache.filestore.definition.ModelDecoder
+import dev.openrune.cache.tools.item.ItemSpriteFactory
 import dev.openrune.cache.util.XteaLoader
-import dev.openrune.game.item.ItemSpriteLoader
+import dev.openrune.filesystem.Cache
 import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.ktor.server.application.*
@@ -21,15 +22,6 @@ import io.ktor.server.plugins.contentnegotiation.*
 import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import net.runelite.cache.IndexType
-import net.runelite.cache.fs.Archive
-import net.runelite.cache.fs.Store
-import net.runelite.cache.region.Region
-import net.runelite.cache.region.RegionLoader
 import routes.open.RegistrationHandler
 import routes.open.cache.CachesHandler
 import routes.open.cache.ItemHandler
@@ -39,57 +31,26 @@ import routes.secure.Logout
 import routes.secure.TokenManager
 import java.io.File
 import java.nio.file.Path
-import javax.imageio.ImageIO
 import java.lang.reflect.Type
+
+val gameCache =  Cache.load(Path.of("./cache/"),false)
+var itemSpriteFactory : ItemSpriteFactory? = null
+var modelDecoder = ModelDecoder(gameCache)
 
 suspend fun main() {
     CachesHandler.loadCaches()
-    CacheManager.init(Path.of("./cache/"),225)
+    CacheManager.init(OsrsCacheProvider(gameCache,227))
     SpriteHandler.init()
     TextureManager.init()
-    ItemSpriteLoader.init("./cache/")
     LoadModels.init()
-
-    System.out.println("Max Object: : ${CacheManager.getObjects().maxOf { it.key }}")
-    System.out.println("Max Models: " + CacheManager.cache.archives(MODELS).size)
-
-    System.out.println("Rcosk: ${CacheManager.getObjectOrDefault(1996).actions}")
-
-    val base: File = File("./cache/")
-    val outDir: File = File("./data/maps")
-    outDir.mkdirs()
-
     XteaLoader.load(File("./cache/xteas.json"))
 
-    val currentCrcs = readCrcMap(outDir.absolutePath).toMutableMap()
-    val needsUpdating = mutableListOf<Int>()
-
-    Store(base).use { store ->
-        store.load()
-        val index = store.getIndex(IndexType.MAPS)
-
-        XteaLoader.xteas.forEach { (mapsquare, xtea) ->
-            val mapArchive = index.findArchiveByName(xtea.name.replace("l", "m"))
-            val landArchive = index.findArchiveByName(xtea.name)
-
-            val cacheCrc = mapArchive.crc + landArchive.crc
-            val currentCrc = currentCrcs[mapsquare]
-
-            if (cacheCrc != currentCrc) {
-                needsUpdating.add(mapsquare)
-                currentCrcs[mapsquare] = cacheCrc
-            }
-        }
-
-        saveCrcMap(outDir, currentCrcs)
-
-        val regionLoader = RegionLoader(store).apply { loadRegions() }
-        val dumper = MapImageDumper(store, regionLoader).apply { load() }
-
-        processRegions(regionLoader.regions.filter { it.regionID in needsUpdating }, dumper, scale = 4)
-    }
-
-
+    itemSpriteFactory = ItemSpriteFactory(
+        modelDecoder,
+        TextureManager.textures,
+        SpriteHandler.sprites,
+        CacheManager.getItems()
+    )
 
     embeddedServer(Netty, port = 8090, module = Application::module).start(wait = true)
 }
@@ -109,34 +70,34 @@ fun readCrcMap(outDir: String): Map<Int, Int> {
 }
 
 
-suspend fun processRegions(regions : List<Region>, dumper: MapImageDumper, scale : Int) = coroutineScope {
-    val totalRegions = regions.size * Region.Z
-    var completedRegions = 0
-    val progressLock = Any()  // For thread-safe progress updates
-    MapImageDumper.MAP_SCALE = scale
-    // Process regions concurrently
-    regions.forEach { region ->
-        (0 until Region.Z).forEach { i ->
-            launch(Dispatchers.IO) {
-                // This operation is now run in a coroutine
-                val image = withContext(Dispatchers.Default) {
-                    dumper.drawRegion(regions.find { it.regionID == region.regionID }!!, i)
-                }
-
-                val outDir = File(File("./data/maps/${scale}/"), "$i")
-                outDir.mkdirs()
-                val imageFile = File(outDir, "${region.regionID}.png")
-                ImageIO.write(image, "png", imageFile)
-
-                // Thread-safe increment of completed regions
-                synchronized(progressLock) {
-                    completedRegions++
-                    printProgressBar(completedRegions, totalRegions)
-                }
-            }
-        }
-    }
-}
+//suspend fun processRegions(regions : List<Region>, dumper: MapImageDumper, scale : Int) = coroutineScope {
+//    val totalRegions = regions.size * Region.Z
+//    var completedRegions = 0
+//    val progressLock = Any()  // For thread-safe progress updates
+//    MapImageDumper.MAP_SCALE = scale
+//    // Process regions concurrently
+//    regions.forEach { region ->
+//        (0 until Region.Z).forEach { i ->
+//            launch(Dispatchers.IO) {
+//                // This operation is now run in a coroutine
+//                val image = withContext(Dispatchers.Default) {
+//                    dumper.drawRegion(regions.find { it.regionID == region.regionID }!!, i)
+//                }
+//
+//                val outDir = File(File("./data/maps/${scale}/"), "$i")
+//                outDir.mkdirs()
+//                val imageFile = File(outDir, "${region.regionID}.png")
+//                ImageIO.write(image, "png", imageFile)
+//
+//                // Thread-safe increment of completed regions
+//                synchronized(progressLock) {
+//                    completedRegions++
+//                    printProgressBar(completedRegions, totalRegions)
+//                }
+//            }
+//        }
+//    }
+//}
 
 fun printProgressBar(done: Int, total: Int) {
     val progress = (done.toDouble() / total * 100).toInt()
@@ -183,6 +144,9 @@ fun Application.module() {
 }
 
 fun Route.publicRoutes() {
+    get("/") {
+        call.respondText("Hello World!", ContentType.Text.Plain)
+    }
     route("/public") {
         post("/register") {
             RegistrationHandler.handleRegistration(call)

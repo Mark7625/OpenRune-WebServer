@@ -1,9 +1,9 @@
 package cache.texture
 
 import SpriteHandler.sprites
-import dev.openrune.cache.CacheManager
-import dev.openrune.cache.filestore.definition.data.TextureType
-import dev.openrune.cache.filestore.definition.decoder.TextureDecoder
+import dev.openrune.OsrsCacheProvider
+import dev.openrune.definition.type.TextureType
+import gameCache
 import java.awt.image.BufferedImage
 
 
@@ -14,26 +14,26 @@ data class TextureInfo(
     val averageRgb: Int,
     val animationDirection : Int,
     val animationSpeed : Int,
-    @Transient val image: BufferedImage // Transient prevents this field from being serialized
+    @Transient val image: BufferedImage
 )
 
 object TextureManager {
 
-    val cache: MutableMap<Int, TextureInfo> = mutableMapOf()
+    val textureCache: MutableMap<Int, TextureInfo> = mutableMapOf()
     val textures: MutableMap<Int, TextureType> = mutableMapOf()
 
     fun init() {
-        textures.putAll(TextureDecoder().load(CacheManager.cache))
+        OsrsCacheProvider.TextureDecoder().load(gameCache,textures)
         textures.forEach {
             val type = it.value
-            cache.put(it.key, TextureInfo(
+            textureCache.put(it.key, TextureInfo(
                 it.key,
                 type.isTransparent,
                 type.fileIds,
                 type.averageRgb,
                 type.animationDirection,
                 type.animationSpeed,
-                sprites[type.fileIds.first()]!!.sprites!!.first().toBufferedImage()
+                sprites[type.fileIds.first()]!!.sprites.first().toBufferedImage()
             ))
         }
     }
