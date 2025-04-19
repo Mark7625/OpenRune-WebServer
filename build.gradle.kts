@@ -16,7 +16,7 @@ dependencies {
     testImplementation(kotlin("test"))
     implementation("io.ktor:ktor-server-core:2.3.2")
 
-    implementation("dev.or2:all:2.0.0")
+    implementation("dev.or2:all:2.0.13")
     // https://mvnrepository.com/artifact/it.unimi.dsi/fastutil
     implementation("it.unimi.dsi:fastutil:8.5.14")
 
@@ -40,6 +40,7 @@ dependencies {
     // https://mvnrepository.com/artifact/com.google.code.gson/gson
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("io.github.microutils:kotlin-logging:1.12.5")
+    implementation("me.tongfei:progressbar:0.9.5")
 }
 
 tasks {

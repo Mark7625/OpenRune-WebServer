@@ -1,47 +1,39 @@
+package routes.open.cache
 
+import cache.GameVals
 import io.ktor.http.*
+import io.ktor.server.application.*
+import io.ktor.server.response.*
 import kotlinx.coroutines.runBlocking
 import java.awt.image.BufferedImage
-import java.awt.Graphics2D
-import java.awt.Image
-import java.awt.RenderingHints
+import java.io.ByteArrayOutputStream
 import java.util.concurrent.TimeUnit
 import javax.imageio.ImageIO
 import com.github.benmanes.caffeine.cache.Caffeine
 import com.github.benmanes.caffeine.cache.LoadingCache
 import dev.openrune.cache.filestore.definition.SpriteDecoder
+import dev.openrune.definition.Js5GameValGroup
 import dev.openrune.definition.type.SpriteType
-import io.ktor.server.application.*
-import io.ktor.server.response.*
+import gameCache
 import routes.open.cache.TextureHandler.json
-import java.io.ByteArrayOutputStream
 
-data class SpriteInfo(val id : Int, val subIndex : Int, val offsetX : Int, val offsetY : Int)
+data class SpriteInfo(val id: Int, val subIndex: Int, val offsetX: Int, val offsetY: Int)
 
 object SpriteHandler {
 
-    private val allSprites : MutableList<SpriteInfo> = emptyList<SpriteInfo>().toMutableList()
-
+    private val allSprites = mutableListOf<SpriteInfo>()
     val sprites: MutableMap<Int, SpriteType> = mutableMapOf()
 
     private val responseCache: LoadingCache<String, BufferedImage> = Caffeine.newBuilder()
         .expireAfterWrite(12, TimeUnit.HOURS)
-        .build { key ->
-            runBlocking {
-                // Fetch and resize image
-                fetchImageWithKey(key)
-            }
-        }
-
+        .build { key -> runBlocking { fetchImageWithKey(key) } }
 
     fun init() {
-
         SpriteDecoder().load(gameCache, sprites)
-
-        sprites.forEach { sprite ->
-            sprite.value.sprites.forEach { subSprite ->
-                if (allSprites.count { it.id == sprite.key } == 0) {
-                    allSprites.add(SpriteInfo(sprite.key,-1,subSprite.offsetX,subSprite.offsetY))
+        sprites.forEach { (id, spriteType) ->
+            spriteType.sprites.forEach { subSprite ->
+                if (allSprites.none { it.id == id }) {
+                    allSprites.add(SpriteInfo(id, -1, subSprite.offsetX, subSprite.offsetY))
                 }
             }
         }
@@ -51,6 +43,7 @@ object SpriteHandler {
         val id = call.parameters["id"]?.toIntOrNull()
         val width = call.parameters["width"]?.toIntOrNull()
         val height = call.parameters["height"]?.toIntOrNull()
+        val gameVal = call.parameters["gameVal"]?.toIntOrNull()
         val keepAspectRatio = call.parameters["keepAspectRatio"]?.toBoolean() ?: true
 
         if (id == null) {
@@ -58,8 +51,7 @@ object SpriteHandler {
             return
         }
 
-        val cacheKey = "$id:${width ?: "orig"}:${height ?: "orig"}:$keepAspectRatio"
-
+        val cacheKey = "${gameVal}:$id:${width ?: "orig"}:${height ?: "orig"}:$keepAspectRatio"
         val texture = responseCache[cacheKey]
 
         call.response.header(HttpHeaders.ContentType, ContentType.Image.PNG.toString())
@@ -72,18 +64,19 @@ object SpriteHandler {
     }
 
     private fun fetchImageWithKey(key: String): BufferedImage {
-        val (idStr, widthStr, heightStr, aspectRatioStr) = key.split(":")
+        val (gameValStr,idStr, widthStr, heightStr, aspectRatioStr) = key.split(":")
+        val gameVal = gameValStr
         val id = idStr.toInt()
         val width = widthStr.toIntOrNull()
         val height = heightStr.toIntOrNull()
         val keepAspectRatio = aspectRatioStr.toBoolean()
 
-        val originalImage = sprites[id]!!.getSprite(true)
+        val originalImage = sprites[id]?.getSprite(true) ?: error("Sprite not found for id: $id")
 
         return if (width != null && height != null) {
             try {
                 resizeImage(originalImage, width, height, keepAspectRatio)
-            }catch (e : Exception) {
+            } catch (e: Exception) {
                 originalImage
             }
         } else {
@@ -91,31 +84,19 @@ object SpriteHandler {
         }
     }
 
-    // Function to resize an image while optionally keeping the aspect ratio
     private fun resizeImage(image: BufferedImage, targetWidth: Int, targetHeight: Int, keepAspectRatio: Boolean): BufferedImage {
-        val width: Int
-        val height: Int
-
-        if (keepAspectRatio) {
+        val (width, height) = if (keepAspectRatio) {
             val aspectRatio = image.width.toDouble() / image.height.toDouble()
-            if (targetWidth.toDouble() / targetHeight.toDouble() > aspectRatio) {
-                width = (targetHeight * aspectRatio).toInt()
-                height = targetHeight
+            if (targetWidth.toDouble() / targetHeight > aspectRatio) {
+                ((targetHeight * aspectRatio).toInt()) to targetHeight
             } else {
-                width = targetWidth
-                height = (targetWidth / aspectRatio).toInt()
+                targetWidth to (targetWidth / aspectRatio).toInt()
             }
         } else {
-            width = targetWidth
-            height = targetHeight
+            targetWidth to targetHeight
         }
 
         val resized = BufferedImage(width, height, image.type)
-        val g2d: Graphics2D = resized.createGraphics()
-        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
-        g2d.drawImage(image.getScaledInstance(width, height, Image.SCALE_SMOOTH), 0, 0, width, height, null)
-        g2d.dispose()
-
         return resized
     }
 }

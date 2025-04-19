@@ -1,6 +1,6 @@
 package cache.texture
 
-import SpriteHandler.sprites
+import routes.open.cache.SpriteHandler.sprites
 import dev.openrune.OsrsCacheProvider
 import dev.openrune.definition.type.TextureType
 import gameCache
