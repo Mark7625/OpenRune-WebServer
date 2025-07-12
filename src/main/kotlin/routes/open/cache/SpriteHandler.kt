@@ -1,6 +1,5 @@
 package routes.open.cache
 
-import cache.GameVals
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.response.*
@@ -12,7 +11,6 @@ import javax.imageio.ImageIO
 import com.github.benmanes.caffeine.cache.Caffeine
 import com.github.benmanes.caffeine.cache.LoadingCache
 import dev.openrune.cache.filestore.definition.SpriteDecoder
-import dev.openrune.definition.Js5GameValGroup
 import dev.openrune.definition.type.SpriteType
 import gameCache
 import routes.open.cache.TextureHandler.json

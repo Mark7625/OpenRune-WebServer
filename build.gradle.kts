@@ -16,7 +16,7 @@ dependencies {
     testImplementation(kotlin("test"))
     implementation("io.ktor:ktor-server-core:2.3.2")
 
-    implementation("dev.or2:all:2.0.13")
+    implementation("dev.or2:all:2.2.2")
     // https://mvnrepository.com/artifact/it.unimi.dsi/fastutil
     implementation("it.unimi.dsi:fastutil:8.5.14")
 
