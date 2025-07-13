@@ -4,6 +4,7 @@ import com.google.gson.GsonBuilder
 import com.google.gson.reflect.TypeToken
 import dev.openrune.cache.CacheManager
 import dev.openrune.cache.MODELS
+import dev.openrune.cache.filestore.definition.ModelDecoder
 import dev.openrune.definition.type.ItemType
 import dev.openrune.definition.type.NpcType
 import dev.openrune.definition.type.ObjectType
@@ -46,6 +47,7 @@ data class ModelAttachments(
 }
 
 object LoadModels {
+    lateinit var modelDecoder: ModelDecoder
 
     var models: MutableMap<Int, ModelData> = ConcurrentHashMap()
 
@@ -60,7 +62,7 @@ object LoadModels {
     }
 
     fun init() {
-
+        modelDecoder = ModelDecoder(gameCache)
         if (!manifest.exists()) {
             loadModelData()
         } else {

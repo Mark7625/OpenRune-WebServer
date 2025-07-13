@@ -14,6 +14,8 @@ import dev.openrune.cache.filestore.definition.SpriteDecoder
 import dev.openrune.definition.type.SpriteType
 import gameCache
 import routes.open.cache.TextureHandler.json
+import java.awt.Graphics2D
+import java.awt.RenderingHints
 
 data class SpriteInfo(val id: Int, val subIndex: Int, val offsetX: Int, val offsetY: Int)
 
@@ -62,39 +64,61 @@ object SpriteHandler {
     }
 
     private fun fetchImageWithKey(key: String): BufferedImage {
-        val (gameValStr,idStr, widthStr, heightStr, aspectRatioStr) = key.split(":")
-        val gameVal = gameValStr
+        val (gameValStr, idStr, widthStr, heightStr, aspectRatioStr) = key.split(":")
         val id = idStr.toInt()
         val width = widthStr.toIntOrNull()
         val height = heightStr.toIntOrNull()
         val keepAspectRatio = aspectRatioStr.toBoolean()
 
-        val originalImage = sprites[id]?.getSprite(true) ?: error("Sprite not found for id: $id")
+        val originalImage = sprites[id]?.getSprite(true)
+            ?: error("Sprite not found for id: $id")
 
-        return if (width != null && height != null) {
-            try {
-                resizeImage(originalImage, width, height, keepAspectRatio)
-            } catch (e: Exception) {
-                originalImage
-            }
+        return if (width != null || height != null) {
+            resizeImage(originalImage, width, height, keepAspectRatio)
         } else {
             originalImage
         }
     }
 
-    private fun resizeImage(image: BufferedImage, targetWidth: Int, targetHeight: Int, keepAspectRatio: Boolean): BufferedImage {
-        val (width, height) = if (keepAspectRatio) {
-            val aspectRatio = image.width.toDouble() / image.height.toDouble()
-            if (targetWidth.toDouble() / targetHeight > aspectRatio) {
-                ((targetHeight * aspectRatio).toInt()) to targetHeight
-            } else {
-                targetWidth to (targetWidth / aspectRatio).toInt()
+    private fun resizeImage(
+        image: BufferedImage,
+        targetWidth: Int?,
+        targetHeight: Int?,
+        keepAspectRatio: Boolean
+    ): BufferedImage {
+        val srcWidth = image.width
+        val srcHeight = image.height
+
+        val (finalWidth, finalHeight) = when {
+            targetWidth != null && targetHeight != null && keepAspectRatio -> {
+                val ratio = minOf(targetWidth.toDouble() / srcWidth, targetHeight.toDouble() / srcHeight)
+                val w = maxOf(1, (srcWidth * ratio).toInt())
+                val h = maxOf(1, (srcHeight * ratio).toInt())
+                w to h
             }
-        } else {
-            targetWidth to targetHeight
+            targetWidth != null && targetHeight != null -> {
+                val w = maxOf(1, targetWidth)
+                val h = maxOf(1, targetHeight)
+                w to h
+            }
+            targetWidth != null -> {
+                val newHeight = if (keepAspectRatio) maxOf(1, (srcHeight * (targetWidth.toDouble() / srcWidth)).toInt()) else srcHeight
+                val w = maxOf(1, targetWidth)
+                w to newHeight
+            }
+            targetHeight != null -> {
+                val newWidth = if (keepAspectRatio) maxOf(1, (srcWidth * (targetHeight.toDouble() / srcHeight)).toInt()) else srcWidth
+                val h = maxOf(1, targetHeight)
+                newWidth to h
+            }
+            else -> srcWidth to srcHeight
         }
 
-        val resized = BufferedImage(width, height, image.type)
-        return resized
+        val resizedImage = BufferedImage(finalWidth, finalHeight, BufferedImage.TYPE_INT_ARGB)
+        val g2d: Graphics2D = resizedImage.createGraphics()
+        g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, RenderingHints.VALUE_INTERPOLATION_BILINEAR)
+        g2d.drawImage(image, 0, 0, finalWidth, finalHeight, null)
+        g2d.dispose()
+        return resizedImage
     }
 }

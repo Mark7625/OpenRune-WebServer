@@ -25,7 +25,7 @@ class ConfigHandler<T>(
     private val getAllConfigs: () -> Map<Int, T>,
     private val getName: (T) -> String?,
     private val getId: (T) -> Int,
-    private val getGameValName: (Int) -> String?,
+    private val getGameValName: (T) -> String?,
     private val availableFilters: Map<String, (T) -> Boolean>,
     private val extractExtraData: (T) -> Map<String, Any> = { emptyMap() }
 ) {
@@ -37,7 +37,7 @@ class ConfigHandler<T>(
             val mode = parts.getOrNull(0) ?: "name"
             val query = parts.getOrNull(1) ?: ""
             val filterKeysCsv = parts.getOrNull(2) ?: ""
-            val amt = parts.getOrNull(3)?.toIntOrNull() ?: 50
+            val amt = parts.getOrNull(3)?.toIntOrNull() ?: 10
             val offset = parts.getOrNull(4)?.toIntOrNull() ?: 0
 
             val filterKeys = if (filterKeysCsv.isBlank()) emptyList() else filterKeysCsv.split(",")
@@ -46,9 +46,7 @@ class ConfigHandler<T>(
         }
 
     suspend fun handleRequest(call: ApplicationCall) {
-        val query = call.request.queryParameters["q"] ?: return call.respondText(
-            "Missing query parameter `q`", status = HttpStatusCode.BadRequest
-        )
+        val query = call.request.queryParameters["q"] ?: ""
         val mode = call.request.queryParameters["mode"] ?: "name"
         val filterKeysCsv = call.request.queryParameters["filters"] ?: ""
         val amt = call.request.queryParameters["amt"]?.toIntOrNull() ?: 50
@@ -86,7 +84,7 @@ class ConfigHandler<T>(
             "gameval" -> {
                 val queryStr = query.trim()
                 allConfigs.values.filter { config ->
-                    val gameValName = getGameValName(getId(config)) ?: ""
+                    val gameValName = getGameValName(config) ?: ""
                     gameValName.contains(queryStr, ignoreCase = true)
                 }
             }
@@ -108,7 +106,6 @@ class ConfigHandler<T>(
             }
         }
 
-        // Apply dynamic filters:
         val filtered = filteredInitial.filter { config ->
             filterKeys.all { key ->
                 val predicate = availableFilters[key]
@@ -125,7 +122,7 @@ class ConfigHandler<T>(
             SearchResult(
                 id = getId(it),
                 name = getName(it) ?: "",
-                gameval = getGameValName(getId(it)) ?: "",
+                gameval = getGameValName(it) ?: "",
                 extraData = extractExtraData(it)
             )
         }
