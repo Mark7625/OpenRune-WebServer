@@ -28,7 +28,7 @@ suspend fun main(args: Array<String>) {
             objectGameVals = cacheService.objectGameVals,
             itemGameVals = cacheService.itemGameVals,
             npcGameVals = cacheService.npcGameVals,
-            spriteGameVals = cacheService.spriteGameVals
+            spriteGameVals = cacheService.spriteGameVals,
         )
     }.start(wait = true)
 }

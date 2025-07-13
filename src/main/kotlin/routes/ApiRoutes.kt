@@ -110,6 +110,22 @@ fun Application.configureRouting(
         }
     )
 
+    val modelHandler = ConfigHandler(
+        gameVals = spriteGameVals,
+        getAllConfigs = { LoadModels.models },
+        getName = { "" },
+        getId = { it.id },
+        getGameValName = { "" },
+        availableFilters = emptyMap(),
+        extractExtraData = { sprite ->
+            mapOf(
+                "totalFaces" to sprite.totalFaces,
+                "totalVerts" to sprite.totalVerts,
+                "attachments" to sprite.attachments.total
+            )
+        }
+    )
+
 
     routing {
         get("/") {
@@ -123,6 +139,7 @@ fun Application.configureRouting(
             get("/objects") { objectHandler.handleRequest(call) }
             get("/textures") { textureHandler.handleRequest(call) }
             get("/sprites") { spriteHandler.handleRequest(call) }
+            get("/models") { modelHandler.handleRequest(call) }
 
             get("/npc/{id?}") {
                 call.respond(GsonBuilder().setPrettyPrinting().create().toJson(CacheManager.getNpc(2)))

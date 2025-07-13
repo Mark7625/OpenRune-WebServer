@@ -5,14 +5,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="93d987c4-e800-4796-9ecb-ccf98bc6177e" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/CacheManagerService.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/GameServicesInitializer.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/routes/ApiRoutes.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/Main.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/Main.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/cache/model/LoadModels.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/cache/model/LoadModels.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/routes/open/cache/ConfigHandler.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/routes/open/cache/ConfigHandler.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/routes/open/cache/SpriteHandler.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/routes/open/cache/SpriteHandler.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/kotlin/routes/ApiRoutes.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/routes/ApiRoutes.kt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

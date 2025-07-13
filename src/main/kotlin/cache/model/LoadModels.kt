@@ -17,6 +17,7 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.roundToInt
 
 data class ModelData(
+    val id : Int,
     val totalFaces: Int,
     val totalVerts: Int,
     val textures: IntArray,
@@ -96,6 +97,7 @@ object LoadModels {
 
                         // Populate model data
                         models[archive] = ModelData(
+                            id = archive,
                             totalFaces = model!!.triangleCount,
                             totalVerts = model.vertexCount,
                             textures = model.triangleTextures?.map { it and 0xFFFF }?.toSet()?.toIntArray() ?: intArrayOf(),
