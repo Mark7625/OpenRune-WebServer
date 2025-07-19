@@ -26,7 +26,6 @@ class GameServicesInitializer(
     fun initialize() {
         modelDecoder = ModelDecoder(gameCache)
 
-        LoadModels.init()
         OpenRS2.loadCaches()
         CachesHandler.loadCaches()
         CacheManager.init(OsrsCacheProvider(gameCache, rev))

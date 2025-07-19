@@ -10,6 +10,7 @@ version = "1.0-SNAPSHOT"
 repositories {
     mavenCentral()
     maven("https://raw.githubusercontent.com/OpenRune/hosting/master")
+    maven("https://jitpack.io")
 }
 
 dependencies {
@@ -41,11 +42,12 @@ dependencies {
     implementation("com.google.code.gson:gson:2.11.0")
     implementation("io.github.microutils:kotlin-logging:1.12.5")
     implementation("me.tongfei:progressbar:0.9.5")
+    implementation("cc.ekblad:4koma:1.2.2-openrune")
 }
 
 tasks {
     shadowJar {
-        archiveBaseName.set("OpenRuneServer")
+        archiveBaseName.set("app")
         archiveClassifier.set("") // Remove the `-all` classifier
         archiveVersion.set(version.toString())
         mergeServiceFiles() // Merge service files if needed

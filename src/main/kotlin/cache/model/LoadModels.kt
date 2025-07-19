@@ -64,6 +64,7 @@ object LoadModels {
 
     fun init() {
         modelDecoder = ModelDecoder(gameCache)
+        File("./data/models/").mkdirs()
         if (!manifest.exists()) {
             loadModelData()
         } else {
@@ -77,7 +78,6 @@ object LoadModels {
         val objectCache = CacheManager.getObjects()
         val itemCache = CacheManager.getItems()
 
-        // Launching coroutines to process archives concurrently
         runBlocking {
             val archives = gameCache.archives(MODELS)
             val totalArchives = archives.size
@@ -138,6 +138,7 @@ object LoadModels {
         objectCache: Map<Int, ObjectType>,
         itemCache: Map<Int, ItemType>
     ) {
+
         npcCache.forEach { npcEntry ->
             val npc = npcEntry.value
             npc.models?.let { models ->
