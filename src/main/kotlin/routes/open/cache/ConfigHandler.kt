@@ -60,6 +60,8 @@ class ConfigHandler<T>(
 
     private lateinit var nameTrie: Trie<T>
     private lateinit var gamevalTrie: Trie<T>
+    private lateinit var nameMap: Map<String, List<T>>
+    private lateinit var gamevalMap: Map<String, List<T>>
 
     private fun refreshCaches() {
         val allConfigs = getAllConfigs().values
@@ -156,43 +158,20 @@ class ConfigHandler<T>(
         return when {
             QueryParser.allQuoted(items) -> {
                 val unquoted = QueryParser.values(items)
-                if (quotedListSuperset != null && quotedListSupersetResult != null && quotedListSuperset!!.containsAll(unquoted)) {
-                    val result = quotedListSupersetResult!!.filter { config ->
-                        val gameValName = getGameValName(config) ?: ""
-                        unquoted.any { gameValName.equals(it, ignoreCase = true) }
-                    }
-                    quotedListSuperset = unquoted
-                    quotedListSupersetResult = result
-                    result
-                } else {
-                    val result = allConfigs.values.filter { config ->
-                        val gameValName = getGameValName(config) ?: ""
-                        unquoted.any { gameValName.equals(it, ignoreCase = true) }
-                    }
-                    quotedListSuperset = unquoted
-                    quotedListSupersetResult = result
-                    result
-                }
+                // Use map for fast lookup, support non-unique gamevals
+                unquoted.flatMap { gamevalMap[it.lowercase()] ?: emptyList() }
             }
             lastQuery != null && lastQueryResult != null && currentItemsWithQuotes == lastItemsWithQuotes -> {
-                lastQueryResult!!.filter { config ->
-                    val gameValName = getGameValName(config) ?: ""
-                    items.any { item ->
-                        if (item.quoted) gameValName.equals(item.value, ignoreCase = true)
-                        else gameValName.contains(item.value, ignoreCase = true)
-                    }
+                runBlocking {
+                    parallelSubstringFilter(lastQueryResult!!, items, isGameval = true)
                 }.also {
                     lastQuery = query
                     lastQueryResult = it
                 }
             }
             else -> {
-                allConfigs.values.filter { config ->
-                    val gameValName = getGameValName(config) ?: ""
-                    items.any { item ->
-                        if (item.quoted) gameValName.equals(item.value, ignoreCase = true)
-                        else gameValName.contains(item.value, ignoreCase = true)
-                    }
+                runBlocking {
+                    parallelSubstringFilter(allConfigs.values.toList(), items, isGameval = true)
                 }.also {
                     lastQuery = query
                     lastQueryResult = it
@@ -222,30 +201,20 @@ class ConfigHandler<T>(
         return when {
             QueryParser.allQuoted(items) -> {
                 val unquoted = QueryParser.values(items)
-                allConfigs.values.filter { config ->
-                    val name = getName(config) ?: ""
-                    unquoted.any { name.equals(it, ignoreCase = true) }
-                }
+                // Use map for fast lookup, support non-unique names
+                unquoted.flatMap { nameMap[it.lowercase()] ?: emptyList() }
             }
             lastQuery != null && lastQueryResult != null && currentItemsWithQuotes == lastItemsWithQuotes -> {
-                lastQueryResult!!.filter { config ->
-                    val name = getName(config) ?: ""
-                    items.any { item ->
-                        if (item.quoted) name.equals(item.value, ignoreCase = true)
-                        else name.contains(item.value, ignoreCase = true)
-                    }
+                runBlocking {
+                    parallelSubstringFilter(lastQueryResult!!, items) // parallelized substring search
                 }.also {
                     lastQuery = query
                     lastQueryResult = it
                 }
             }
             else -> {
-                allConfigs.values.filter { config ->
-                    val name = getName(config) ?: ""
-                    items.any { item ->
-                        if (item.quoted) name.equals(item.value, ignoreCase = true)
-                        else name.contains(item.value, ignoreCase = true)
-                    }
+                runBlocking {
+                    parallelSubstringFilter(allConfigs.values.toList(), items) // parallelized substring search
                 }.also {
                     lastQuery = query
                     lastQueryResult = it
@@ -286,6 +255,8 @@ class ConfigHandler<T>(
             nameTrie.insert(item)
             gamevalTrie.insert(item)
         }
+        nameMap = configs.groupBy { getName(it)?.lowercase() ?: "" }
+        gamevalMap = configs.groupBy { getGameValName(it)?.lowercase() ?: "" }
     }
 
     data class PaginatedProfile(val totalResults: Int)
@@ -343,6 +314,32 @@ class ConfigHandler<T>(
         }.toList()
         val end = System.nanoTime()
         return PaginatedResponse(total, results) to PaginatedProfile(total)
+    }
+
+    private suspend fun parallelSubstringFilter(configs: List<T>, items: List<QueryParser.QueryItem>, isGameval: Boolean = false): List<T> {
+        if (configs.size <= 1000) {
+            return configs.filter { config ->
+                val value = if (isGameval) getGameValName(config) ?: "" else getName(config) ?: ""
+                items.any { item ->
+                    if (item.quoted) value.equals(item.value, ignoreCase = true)
+                    else value.contains(item.value, ignoreCase = true)
+                }
+            }
+        }
+        val chunkSize = 500
+        return coroutineScope {
+            configs.chunked(chunkSize).map { chunk ->
+                async(Dispatchers.Default) {
+                    chunk.filter { config ->
+                        val value = if (isGameval) getGameValName(config) ?: "" else getName(config) ?: ""
+                        items.any { item ->
+                            if (item.quoted) value.equals(item.value, ignoreCase = true)
+                            else value.contains(item.value, ignoreCase = true)
+                        }
+                    }
+                }
+            }.flatMap { it.await() }
+        }
     }
 }
 
