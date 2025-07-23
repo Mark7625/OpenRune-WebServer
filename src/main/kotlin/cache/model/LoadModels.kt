@@ -5,6 +5,8 @@ import com.google.gson.reflect.TypeToken
 import dev.openrune.cache.CacheManager
 import dev.openrune.cache.MODELS
 import dev.openrune.cache.filestore.definition.ModelDecoder
+import dev.openrune.cache.gameval.GameValElement
+import dev.openrune.cache.gameval.GameValHandler.lookup
 import dev.openrune.definition.type.ItemType
 import dev.openrune.definition.type.NpcType
 import dev.openrune.definition.type.ObjectType
@@ -26,24 +28,24 @@ data class ModelData(
 )
 
 data class ModelAttachments(
-    val items: MutableList<String>,
-    val objects: MutableList<String>,
-    val npcs: MutableList<String>,
-    var total: Int = 0 // Total count of all attachments, initialized at 0
+    val items: MutableSet<GameValElement> = mutableSetOf(),
+    val objects: MutableSet<GameValElement> = mutableSetOf(),
+    val npcs: MutableSet<GameValElement> = mutableSetOf(),
+    var total: Int = 0
 ) {
-    fun addItem(item: String) {
+    fun addItem(item: GameValElement) {
         items.add(item)
-        total++ // Increment total in real-time
+        total++
     }
 
-    fun addObject(obj: String) {
+    fun addObject(obj: GameValElement) {
         objects.add(obj)
-        total++ // Increment total in real-time
+        total++
     }
 
-    fun addNpc(npc: String) {
+    fun addNpc(npc: GameValElement) {
         npcs.add(npc)
-        total++ // Increment total in real-time
+        total++
     }
 }
 
@@ -62,18 +64,26 @@ object LoadModels {
         print("\rProcessing models: |$bar| $percent% ($progress/$total)")
     }
 
-    fun init() {
+    fun init(
+        objectGameVals: List<GameValElement>,
+        npcGameVals: List<GameValElement>,
+        itemGameVals: List<GameValElement>
+    ) {
         modelDecoder = ModelDecoder(gameCache)
         File("./data/models/").mkdirs()
         if (!manifest.exists()) {
-            loadModelData()
+            loadModelData(objectGameVals,npcGameVals,itemGameVals)
         } else {
             val typeToken = object : TypeToken<MutableMap<Int, ModelData>>() {}.type
             models = Gson().fromJson<MutableMap<Int, ModelData>>(manifest.readText(), typeToken) ?: ConcurrentHashMap()
         }
     }
 
-    private fun loadModelData() {
+    private fun loadModelData(
+        objectGameVals: List<GameValElement>,
+        npcGameVals: List<GameValElement>,
+        itemGameVals: List<GameValElement>
+    ) {
         val npcCache = CacheManager.getNpcs()
         val objectCache = CacheManager.getObjects()
         val itemCache = CacheManager.getItems()
@@ -90,9 +100,9 @@ object LoadModels {
                     try {
                         val model = modelDecoder.getModel(archive)
                         val attachments = ModelAttachments(
-                            items = mutableListOf(),
-                            objects = mutableListOf(),
-                            npcs = mutableListOf()
+                            items = mutableSetOf(),
+                            objects = mutableSetOf(),
+                            npcs = mutableSetOf()
                         )
 
                         // Populate model data
@@ -105,7 +115,16 @@ object LoadModels {
                             attachments = attachments
                         )
 
-                        processAttachments(archive, attachments, npcCache, objectCache, itemCache)
+                        processAttachments(
+                            archive,
+                            attachments,
+                            npcCache,
+                            objectCache,
+                            itemCache,
+                            objectGameVals,
+                            npcGameVals,
+                            itemGameVals
+                        )
                     } catch (e: NullPointerException) {
                         println("Error processing model archive: $archive")
                         println("Bytes for archive are null or model loading failed for archive $archive")
@@ -136,19 +155,17 @@ object LoadModels {
         attachments: ModelAttachments,
         npcCache: Map<Int, NpcType>,
         objectCache: Map<Int, ObjectType>,
-        itemCache: Map<Int, ItemType>
+        itemCache: Map<Int, ItemType>,
+        objectGameVals: List<GameValElement>,
+        npcGameVals: List<GameValElement>,
+        itemGameVals: List<GameValElement>
     ) {
 
         npcCache.forEach { npcEntry ->
             val npc = npcEntry.value
             npc.models?.let { models ->
                 if (models.contains(archive)) {
-                    attachments.addNpc(npc.name)
-                }
-            }
-            npc.chatheadModels?.let { chatheadModels ->
-                if (chatheadModels.contains(archive)) {
-                    attachments.addNpc("${npc.name} Chat Heads")
+                    attachments.addNpc(npcGameVals.lookup(npcEntry.key)!!)
                 }
             }
         }
@@ -157,7 +174,7 @@ object LoadModels {
             val obj = objEntry.value
             obj.objectModels?.let { models ->
                 if (models.contains(archive)) {
-                    attachments.addObject(obj.name?: "null")
+                    attachments.addObject(objectGameVals.lookup(objEntry.key)!!)
                 }
             }
         }
@@ -175,7 +192,7 @@ object LoadModels {
 
             models.forEach { model ->
                 if (model == archive) {
-                    attachments.addItem(item.name)
+                    attachments.addItem(itemGameVals.lookup(itemEntry.key)!!)
                 }
             }
         }

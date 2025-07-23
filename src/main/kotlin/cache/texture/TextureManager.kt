@@ -1,9 +1,15 @@
 package cache.texture
 
+import LoadModels
+import ModelAttachments
+import cacheLibrary
+import dev.openrune.Index
 import routes.open.cache.SpriteHandler.sprites
 import dev.openrune.OsrsCacheProvider
+import dev.openrune.definition.type.OverlayType
 import dev.openrune.definition.type.TextureType
 import gameCache
+import routes.open.cache.ModelHandler
 import java.awt.image.BufferedImage
 
 
@@ -14,27 +20,64 @@ data class TextureInfo(
     val averageRgb: Int,
     val animationDirection : Int,
     val animationSpeed : Int,
-    @Transient val image: BufferedImage
+    val spriteCrc : Int,
+    @Transient val image: BufferedImage,
+    val attachments: TextureAttachments
+)
+
+data class TextureAttachments(
+    val models: ModelAttachments = ModelAttachments(mutableSetOf(), mutableSetOf(), mutableSetOf()),
+    val overlays: MutableList<Int> = mutableListOf(),
+    var total: Int = 0
 )
 
 object TextureManager {
+
+    var crc = 0
 
     val textureCache: MutableMap<Int, TextureInfo> = mutableMapOf()
     val textures: MutableMap<Int, TextureType> = mutableMapOf()
 
     fun init() {
         OsrsCacheProvider.TextureDecoder().load(gameCache,textures)
+
+        crc = cacheLibrary.index(Index.TEXTURES).crc
+
+        val overlays: MutableMap<Int, OverlayType> = mutableMapOf()
+        OsrsCacheProvider.OverlayDecoder().load(gameCache,overlays)
+
         textures.forEach {
             val type = it.value
-            textureCache.put(it.key, TextureInfo(
+
+            val attachments = TextureAttachments()
+
+            overlays.filter { overlay -> overlay.value.texture == type.id }.forEach { overlayType ->
+                attachments.overlays.add(overlayType.key)
+                attachments.total++
+            }
+
+            LoadModels.models
+                .filter { model -> model.value.textures.contains(it.value.id) }
+                .forEach { model ->
+                    model.value.attachments.items.forEach { item -> attachments.models.addItem(item) }
+                    model.value.attachments.objects.forEach { obj -> attachments.models.addObject(obj) }
+                    model.value.attachments.npcs.forEach { npc -> attachments.models.addNpc(npc) }
+                    attachments.total += model.value.attachments.total
+                }
+
+            textureCache[it.key] = TextureInfo(
                 it.key,
                 type.isTransparent,
                 type.fileIds,
                 type.averageRgb,
                 type.animationDirection,
                 type.animationSpeed,
-                sprites[type.fileIds.first()]!!.sprites.first().toBufferedImage()
-            ))
+                cacheLibrary.index(Index.SPRITES).archive(type.fileIds.first())!!.crc,
+                sprites[type.fileIds.first()]!!.sprites.first().toBufferedImage(),
+                attachments
+            )
+
+
         }
     }
 

@@ -1,3 +1,5 @@
+import com.displee.cache.CacheLibrary
+import dev.openrune.cache.CacheDelegate
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import mu.KotlinLogging
@@ -9,6 +11,10 @@ private val logger = KotlinLogging.logger {}
 lateinit var gameCache: dev.openrune.filesystem.Cache
     private set
 
+
+lateinit var cacheLibrary: CacheLibrary
+    private set
+
 suspend fun main(args: Array<String>) {
     val rev = args.getOrNull(0)?.toIntOrNull() ?: 231
     val gameType = args.getOrNull(1) ?: "OLDSCHOOL"
@@ -17,8 +23,9 @@ suspend fun main(args: Array<String>) {
     val cacheService = CacheManagerService(rev, cacheDir)
     cacheService.prepareCache()
 
-    val gameServices = GameServicesInitializer(cacheDir, rev, cacheService.gameCache)
+    val gameServices = GameServicesInitializer(cacheDir, rev, cacheService)
     gameCache = cacheService.gameCache
+    cacheLibrary = CacheLibrary(cacheDir.absolutePath)
     gameServices.initialize()
 
     logger.info { "Starting server with rev=$rev and gameType=$gameType" }

@@ -15,7 +15,7 @@ private val logger = KotlinLogging.logger {}
 class GameServicesInitializer(
     private val cacheDir: File,
     private val rev: Int,
-    private val gameCache: dev.openrune.filesystem.Cache
+    private val gameCacheServices: CacheManagerService
 ) {
     lateinit var modelDecoder: ModelDecoder
         private set
@@ -24,16 +24,16 @@ class GameServicesInitializer(
         private set
 
     fun initialize() {
-        modelDecoder = ModelDecoder(gameCache)
+        modelDecoder = ModelDecoder(gameCacheServices.gameCache)
 
         OpenRS2.loadCaches()
         CachesHandler.loadCaches()
-        CacheManager.init(OsrsCacheProvider(gameCache, rev))
+        CacheManager.init(OsrsCacheProvider(gameCacheServices.gameCache, rev))
 
         SpriteHandler.init()
-        TextureManager.init()
-        LoadModels.init()
+        LoadModels.init(gameCacheServices.objectGameVals,gameCacheServices.npcGameVals,gameCacheServices.itemGameVals)
         XteaLoader.load(File(cacheDir, "xteas.json"))
+        TextureManager.init()
 
         itemSpriteFactory = ItemSpriteFactory(
             modelDecoder,

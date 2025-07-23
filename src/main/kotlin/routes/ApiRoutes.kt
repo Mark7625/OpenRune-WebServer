@@ -15,6 +15,7 @@ import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import routes.open.cache.*
+import routes.open.cache.web.WebTextureSyncController
 import java.io.File
 
 fun Application.configureRouting(
@@ -89,6 +90,8 @@ fun Application.configureRouting(
                 "averageRgb" to texture.averageRgb,
                 "isTransparent" to texture.isTransparent,
                 "animationSpeed" to texture.animationSpeed,
+                "attachmentsTotal" to texture.attachments.total,
+                "attachments" to texture.attachments,
                 "fileIds" to texture.fileIds
 
             )
@@ -117,11 +120,14 @@ fun Application.configureRouting(
         getId = { it.id },
         getGameValName = { "" },
         availableFilters = emptyMap(),
-        extractExtraData = { sprite ->
+        extractExtraData = { models ->
             mapOf(
-                "totalFaces" to sprite.totalFaces,
-                "totalVerts" to sprite.totalVerts,
-                "attachments" to sprite.attachments.total
+                "totalFaces" to models.totalFaces,
+                "totalVerts" to models.totalVerts,
+                "colors" to models.colors,
+                "textures" to models.textures.map { TextureManager.textures[it]?.fileIds?.first() }.filterNotNull(),
+                "attachmentsTotal" to models.attachments.total,
+                "attachments" to models.attachments,
             )
         }
     )
@@ -152,6 +158,13 @@ fun Application.configureRouting(
             get("/map") {
                 call.respond(File("./data/maps/maps.json").readText())
             }
+
+            route("web") {
+                get("/textures") {
+                    WebTextureSyncController.handleTextureById(call)
+                }
+            }
+
         }
     }
 }
