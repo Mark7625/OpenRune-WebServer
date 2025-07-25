@@ -30,6 +30,10 @@ class CacheManagerService(
         private set
     lateinit var spriteGameVals: List<GameValElement>
         private set
+    lateinit var seqGameVals: List<GameValElement>
+        private set
+    lateinit var spotGameVals: List<GameValElement>
+        private set
 
     suspend fun prepareCache() {
         if (!cacheDir.exists()) {
@@ -101,5 +105,7 @@ class CacheManagerService(
         itemGameVals = GameValHandler.readGameVal(GameValGroupTypes.OBJTYPES, gameCache)
         npcGameVals = GameValHandler.readGameVal(GameValGroupTypes.NPCTYPES, gameCache)
         spriteGameVals = GameValHandler.readGameVal(GameValGroupTypes.SPRITETYPES, gameCache)
+        seqGameVals = GameValHandler.readGameVal(GameValGroupTypes.SEQTYPES, gameCache)
+        spotGameVals = GameValHandler.readGameVal(GameValGroupTypes.SPOTTYPES, gameCache)
     }
 }

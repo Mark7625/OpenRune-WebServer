@@ -2,11 +2,14 @@ package routes
 
 import cache.texture.TextureManager
 import com.google.gson.GsonBuilder
+import dev.openrune.OsrsCacheProvider
 import dev.openrune.cache.CacheManager
 import dev.openrune.cache.gameval.GameValElement
 import dev.openrune.cache.gameval.GameValHandler.lookup
 import dev.openrune.cache.gameval.GameValHandler.lookupAs
 import dev.openrune.cache.gameval.impl.Sprite
+import dev.openrune.definition.type.SpotAnimType
+import gameCache
 import io.ktor.http.*
 import io.ktor.server.application.*
 import io.ktor.server.plugins.contentnegotiation.*
@@ -17,13 +20,18 @@ import io.ktor.server.routing.*
 import routes.open.cache.*
 import routes.open.cache.web.WebTextureSyncController
 import java.io.File
+import kotlin.math.ceil
 
 fun Application.configureRouting(
     objectGameVals: List<GameValElement>,
     itemGameVals: List<GameValElement>,
     npcGameVals: List<GameValElement>,
-    spriteGameVals: List<GameValElement>
+    spriteGameVals: List<GameValElement>,
+    seqGameVals: List<GameValElement>,
+    spotGameVals: List<GameValElement>,
 ) {
+
+
     install(ContentNegotiation) {
         json()
     }
@@ -132,6 +140,38 @@ fun Application.configureRouting(
         }
     )
 
+    val sequencesHandler = ConfigHandler(
+        gameVals = seqGameVals,
+        getAllConfigs = { CacheManager.getAnims() },
+        getName = { "" },
+        getId = { it.id },
+        getGameValName = { npc -> seqGameVals.lookup(npc.id)?.name },
+        availableFilters = emptyMap(),
+        extractExtraData = { seq ->
+            mapOf(
+                "length" to seq.getAnimationLength()
+            )
+        }
+    )
+
+    val spotAnims = emptyMap<Int,SpotAnimType>().toMutableMap()
+
+    OsrsCacheProvider.SpotAnimDecoder().load(gameCache,spotAnims)
+
+    val spotAnimHandler = ConfigHandler(
+        gameVals = seqGameVals,
+        getAllConfigs = { spotAnims },
+        getName = { "" },
+        getId = { it.id },
+        getGameValName = { spotAnim -> spotGameVals.lookup(spotAnim.id)?.name },
+        availableFilters = emptyMap(),
+        extractExtraData = { spot ->
+            mapOf(
+                "length" to (CacheManager.getAnim(spot.animationId)?.getAnimationLength() ?: 0)
+            )
+        }
+    )
+
 
     routing {
         get("/") {
@@ -144,6 +184,8 @@ fun Application.configureRouting(
             get("/items") { itemHandler.handleRequest(call) }
             get("/objects") { objectHandler.handleRequest(call) }
             get("/textures") { textureHandler.handleRequest(call) }
+            get("/seq") { sequencesHandler.handleRequest(call) }
+            get("/spotanim") { spotAnimHandler.handleRequest(call) }
             get("/sprites") { spriteHandler.handleRequest(call) }
             get("/models") { modelHandler.handleRequest(call) }
 

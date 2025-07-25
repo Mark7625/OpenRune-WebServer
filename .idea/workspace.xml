@@ -5,12 +5,12 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="93d987c4-e800-4796-9ecb-ccf98bc6177e" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/routes/open/cache/web/WebTextureSyncController.kt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/src/main/kotlin/cache/AnimationGrouping.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/kotlin/CacheManagerService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/CacheManagerService.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/GameServicesInitializer.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/GameServicesInitializer.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/Main.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/Main.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/cache/model/LoadModels.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/cache/model/LoadModels.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/cache/texture/TextureManager.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/cache/texture/TextureManager.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/routes/ApiRoutes.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/routes/ApiRoutes.kt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -138,7 +138,7 @@
       <recent name="routes.open" />
     </key>
   </component>
-  <component name="RunManager" selected="Kotlin.MainKt (1)">
+  <component name="RunManager" selected="Gradle.OpenRune-WebServer [shadowJar]">
     <configuration name="OpenRune-WebServer [shadowJar]" type="GradleRunConfiguration" factoryName="Gradle" temporary="true">
       <ExternalSystemSettings>
         <option name="executionName" />
@@ -177,9 +177,9 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Gradle.OpenRune-WebServer [shadowJar]" />
         <item itemvalue="Kotlin.MainKt (1)" />
         <item itemvalue="Kotlin.MainKt" />
-        <item itemvalue="Gradle.OpenRune-WebServer [shadowJar]" />
       </list>
     </recent_temporary>
   </component>

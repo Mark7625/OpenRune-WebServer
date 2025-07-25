@@ -23,6 +23,8 @@ suspend fun main(args: Array<String>) {
     val cacheService = CacheManagerService(rev, cacheDir)
     cacheService.prepareCache()
 
+
+
     val gameServices = GameServicesInitializer(cacheDir, rev, cacheService)
     gameCache = cacheService.gameCache
     cacheLibrary = CacheLibrary(cacheDir.absolutePath)
@@ -36,6 +38,8 @@ suspend fun main(args: Array<String>) {
             itemGameVals = cacheService.itemGameVals,
             npcGameVals = cacheService.npcGameVals,
             spriteGameVals = cacheService.spriteGameVals,
+            seqGameVals = cacheService.seqGameVals,
+            spotGameVals = cacheService.spotGameVals,
         )
     }.start(wait = true)
 }
