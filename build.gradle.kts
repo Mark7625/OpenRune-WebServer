@@ -81,7 +81,7 @@ tasks {
 
     registerBootTask("bootRunescape", -1, "RUNESCAPE", "LIVE")
 
-    registerBootTask("bootOldschool", -1, "OLDSCHOOL", "LIVE")
+    registerBootTask("bootOldschool", 235, "OLDSCHOOL", "LIVE")
 
     registerBootTask("bootSailing", 232, "OLDSCHOOL", "BETA")
 }

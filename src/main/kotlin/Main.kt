@@ -20,6 +20,7 @@ suspend fun main(args: Array<String>) {
     val rev = args.getOrNull(0)?.toIntOrNull() ?: -1
     val game = args.getOrNull(1) ?: GameType.OLDSCHOOL.toString()
     val environmentType = args.getOrNull(2) ?: CacheEnvironment.LIVE.toString()
+    val networkPort = args.getOrNull(3)?.toInt() ?: 8090
 
     val gameType = GameType.valueOf(game)
     val environment = CacheEnvironment.valueOf(environmentType)
@@ -38,7 +39,7 @@ suspend fun main(args: Array<String>) {
 
     logger.info { "Starting server with rev=$rev and gameType=$gameType" }
 
-    embeddedServer(Netty, port = 8090) {
+    embeddedServer(Netty, port = networkPort) {
         configureRouting(
             objectGameVals = cacheService.objectGameVals,
             itemGameVals = cacheService.itemGameVals,

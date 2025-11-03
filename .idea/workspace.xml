@@ -7,13 +7,7 @@
     <list default="true" id="93d987c4-e800-4796-9ecb-ccf98bc6177e" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/CacheManagerService.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/CacheManagerService.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/GameServicesInitializer.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/GameServicesInitializer.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/Main.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/Main.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/cache/texture/TextureManager.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/cache/texture/TextureManager.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/routes/ApiRoutes.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/routes/ApiRoutes.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/routes/open/cache/SpriteHandler.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/routes/open/cache/SpriteHandler.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/resources/application.conf" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -98,6 +92,7 @@
     "Gradle.Download Sources.executor": "Run",
     "Gradle.OpenRune-WebServer [:MainKt.main()].executor": "Run",
     "Gradle.OpenRune-WebServer [:org.example.MainKt.main()].executor": "Run",
+    "Gradle.OpenRune-WebServer [bootOldschool].executor": "Run",
     "Gradle.OpenRune-WebServer [bootSailing].executor": "Run",
     "Gradle.OpenRune-WebServer [shadowJar].executor": "Run",
     "Kotlin.MainKt (1).executor": "Run",
@@ -144,7 +139,29 @@
       <recent name="routes.open" />
     </key>
   </component>
-  <component name="RunManager" selected="Gradle.OpenRune-WebServer [shadowJar]">
+  <component name="RunManager" selected="Gradle.OpenRune-WebServer [bootOldschool]">
+    <configuration name="OpenRune-WebServer [bootOldschool]" type="GradleRunConfiguration" factoryName="Gradle" temporary="true">
+      <ExternalSystemSettings>
+        <option name="executionName" />
+        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="externalSystemIdString" value="GRADLE" />
+        <option name="scriptParameters" />
+        <option name="taskDescriptions">
+          <list />
+        </option>
+        <option name="taskNames">
+          <list>
+            <option value="bootOldschool" />
+          </list>
+        </option>
+        <option name="vmOptions" />
+      </ExternalSystemSettings>
+      <ExternalSystemDebugServerProcess>true</ExternalSystemDebugServerProcess>
+      <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
+      <DebugAllEnabled>false</DebugAllEnabled>
+      <RunAsTest>false</RunAsTest>
+      <method v="2" />
+    </configuration>
     <configuration name="OpenRune-WebServer [bootSailing]" type="GradleRunConfiguration" factoryName="Gradle" temporary="true">
       <ExternalSystemSettings>
         <option name="executionName" />
@@ -205,8 +222,9 @@
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="Gradle.OpenRune-WebServer [shadowJar]" />
+        <item itemvalue="Gradle.OpenRune-WebServer [bootOldschool]" />
         <item itemvalue="Gradle.OpenRune-WebServer [bootSailing]" />
+        <item itemvalue="Gradle.OpenRune-WebServer [shadowJar]" />
         <item itemvalue="Kotlin.MainKt (1)" />
         <item itemvalue="Kotlin.MainKt" />
       </list>
