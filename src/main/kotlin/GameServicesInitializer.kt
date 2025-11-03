@@ -33,7 +33,7 @@ class GameServicesInitializer(
         SpriteHandler.init()
         LoadModels.init(gameCacheServices.objectGameVals,gameCacheServices.npcGameVals,gameCacheServices.itemGameVals)
         XteaLoader.load(File(cacheDir, "xteas.json"))
-        TextureManager.init()
+        TextureManager.init(gameCacheServices.rev)
 
         itemSpriteFactory = ItemSpriteFactory(
             modelDecoder,

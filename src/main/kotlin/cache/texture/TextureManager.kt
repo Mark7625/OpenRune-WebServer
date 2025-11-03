@@ -15,8 +15,8 @@ import java.awt.image.BufferedImage
 
 data class TextureInfo(
     val id : Int,
+    val fileId : Int,
     val isTransparent: Boolean,
-    val fileIds: MutableList<Int>,
     val averageRgb: Int,
     val animationDirection : Int,
     val animationSpeed : Int,
@@ -38,8 +38,8 @@ object TextureManager {
     val textureCache: MutableMap<Int, TextureInfo> = mutableMapOf()
     val textures: MutableMap<Int, TextureType> = mutableMapOf()
 
-    fun init() {
-        OsrsCacheProvider.TextureDecoder().load(gameCache,textures)
+    fun init(rev : Int) {
+        OsrsCacheProvider.TextureDecoder(rev).load(gameCache,textures)
 
         crc = cacheLibrary.index(Index.TEXTURES).crc
 
@@ -67,13 +67,13 @@ object TextureManager {
 
             textureCache[it.key] = TextureInfo(
                 it.key,
+                type.fileId,
                 type.isTransparent,
-                type.fileIds,
                 type.averageRgb,
                 type.animationDirection,
                 type.animationSpeed,
-                cacheLibrary.index(Index.SPRITES).archive(type.fileIds.first())!!.crc,
-                sprites[type.fileIds.first()]!!.sprites.first().toBufferedImage(),
+                cacheLibrary.index(Index.SPRITES).archive(type.fileId)!!.crc,
+                sprites[type.fileId]!!.sprites.first().toBufferedImage(),
                 attachments
             )
 

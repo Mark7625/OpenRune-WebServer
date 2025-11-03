@@ -8,7 +8,9 @@ import dev.openrune.cache.gameval.GameValElement
 import dev.openrune.cache.gameval.GameValHandler.lookup
 import dev.openrune.cache.gameval.GameValHandler.lookupAs
 import dev.openrune.cache.gameval.impl.Sprite
+import dev.openrune.definition.type.OverlayType
 import dev.openrune.definition.type.SpotAnimType
+import dev.openrune.definition.type.UnderlayType
 import gameCache
 import io.ktor.http.*
 import io.ktor.server.application.*
@@ -89,7 +91,7 @@ fun Application.configureRouting(
         getAllConfigs = { TextureManager.textureCache },
         getName = { "" },
         getId = { it.id },
-        getGameValName = { texture -> spriteGameVals.lookup(texture.fileIds.first())?.name },
+        getGameValName = { texture -> spriteGameVals.lookup(texture.fileId)?.name },
         availableFilters = mapOf(
 
         ),
@@ -100,7 +102,7 @@ fun Application.configureRouting(
                 "animationSpeed" to texture.animationSpeed,
                 "attachmentsTotal" to texture.attachments.total,
                 "attachments" to texture.attachments,
-                "fileIds" to texture.fileIds
+                "fileId" to texture.fileId
 
             )
         }
@@ -133,7 +135,7 @@ fun Application.configureRouting(
                 "totalFaces" to models.totalFaces,
                 "totalVerts" to models.totalVerts,
                 "colors" to models.colors,
-                "textures" to models.textures.map { TextureManager.textures[it]?.fileIds?.first() }.filterNotNull(),
+                "textures" to models.textures.map { TextureManager.textures[it]?.fileId }.filterNotNull(),
                 "attachmentsTotal" to models.attachments.total,
                 "attachments" to models.attachments,
             )
@@ -172,6 +174,43 @@ fun Application.configureRouting(
         }
     )
 
+    val overlays = emptyMap<Int, OverlayType>().toMutableMap()
+
+    OsrsCacheProvider.OverlayDecoder().load(gameCache,overlays)
+
+    val overlaysConfig = ConfigHandler(
+        gameVals = emptyList(),
+        getAllConfigs = { overlays },
+        getName = { "" },
+        getId = { it.id },
+        getGameValName = { "" },
+        availableFilters = emptyMap(),
+        extractExtraData = { overlay ->
+            mapOf(
+                "texture" to overlay.texture,
+                "water" to overlay.water,
+                "hideUnderlay" to overlay.hideUnderlay,
+                "secondaryRgb" to overlay.secondaryRgb,
+                "primaryRgb" to overlay.primaryRgb
+
+            )
+        }
+    )
+
+    val underlays = emptyMap<Int, UnderlayType>().toMutableMap()
+
+    OsrsCacheProvider.UnderlayDecoder().load(gameCache,underlays)
+
+    val underlaysConfig = ConfigHandler(
+        gameVals = emptyList(),
+        getAllConfigs = { underlays },
+        getName = { "" },
+        getId = { it.id },
+        getGameValName = { "" },
+        availableFilters = emptyMap(),
+        extractExtraData = { overlay -> mapOf("rgb" to overlay.rgb) }
+    )
+
 
     routing {
         get("/") {
@@ -179,11 +218,17 @@ fun Application.configureRouting(
         }
 
         route("/public") {
+            get("/status") {
+                call.respondText("OK")
+            }
+
             get("/caches/{type...}") { CachesHandler.handle(call) }
             get("/npcs") { npcHandler.handleRequest(call) }
             get("/items") { itemHandler.handleRequest(call) }
             get("/objects") { objectHandler.handleRequest(call) }
             get("/textures") { textureHandler.handleRequest(call) }
+            get("/overlays") { overlaysConfig.handleRequest(call) }
+            get("/underlays") { underlaysConfig.handleRequest(call) }
             get("/seq") { sequencesHandler.handleRequest(call) }
             get("/spotanim") { spotAnimHandler.handleRequest(call) }
             get("/sprites") { spriteHandler.handleRequest(call) }

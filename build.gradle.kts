@@ -18,7 +18,7 @@ dependencies {
     testImplementation(kotlin("test"))
     implementation("io.ktor:ktor-server-core:2.3.2")
 
-    implementation("dev.or2:all:2.2.3")
+    implementation("dev.or2:all:2.2.9.1")
     // https://mvnrepository.com/artifact/it.unimi.dsi/fastutil
     implementation("it.unimi.dsi:fastutil:8.5.14")
 
@@ -65,4 +65,23 @@ tasks.test {
 }
 kotlin {
     jvmToolchain(21)
+}
+
+tasks {
+    fun registerBootTask(name: String, rev: Int, gameType: String, environment: String) {
+        register<JavaExec>(name) {
+            group = "runescape"
+            description = "Boots the RuneScape cache with $gameType ($environment)"
+            mainClass.set("MainKt")
+            classpath = sourceSets["main"].runtimeClasspath
+            args = listOf(rev.toString(), gameType, environment)
+            jvmArgs("-Xmx4G")
+        }
+    }
+
+    registerBootTask("bootRunescape", -1, "RUNESCAPE", "LIVE")
+
+    registerBootTask("bootOldschool", -1, "OLDSCHOOL", "LIVE")
+
+    registerBootTask("bootSailing", 232, "OLDSCHOOL", "BETA")
 }

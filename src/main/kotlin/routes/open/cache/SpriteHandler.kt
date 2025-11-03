@@ -16,6 +16,7 @@ import gameCache
 import routes.open.cache.TextureHandler.json
 import java.awt.Graphics2D
 import java.awt.RenderingHints
+import java.io.File
 
 data class SpriteInfo(val id: Int, val subIndex: Int, val offsetX: Int, val offsetY: Int)
 
@@ -31,7 +32,8 @@ object SpriteHandler {
     fun init() {
         SpriteDecoder().load(gameCache, sprites)
         sprites.forEach { (id, spriteType) ->
-            spriteType.sprites.forEach { subSprite ->
+            spriteType.sprites.forEachIndexed { index, subSprite ->
+                val img = subSprite.toBufferedImage()
                 if (allSprites.none { it.id == id }) {
                     allSprites.add(SpriteInfo(id, -1, subSprite.offsetX, subSprite.offsetY))
                 }
@@ -70,7 +72,7 @@ object SpriteHandler {
         val height = heightStr.toIntOrNull()
         val keepAspectRatio = aspectRatioStr.toBoolean()
 
-        val originalImage = sprites[id]?.getSprite(true)
+        val originalImage = sprites[id]?.sprites?.first()?.toBufferedImage()
             ?: error("Sprite not found for id: $id")
 
         return if (width != null || height != null) {

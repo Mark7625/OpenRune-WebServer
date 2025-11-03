@@ -1,7 +1,9 @@
 import dev.openrune.cache.gameval.GameValElement
 import dev.openrune.cache.gameval.GameValHandler
+import dev.openrune.cache.tools.CacheEnvironment
 import dev.openrune.definition.GameValGroupTypes
 import dev.openrune.cache.tools.DownloadListener
+import dev.openrune.cache.tools.GameType
 import dev.openrune.cache.tools.OpenRS2
 import mu.KotlinLogging
 import me.tongfei.progressbar.ProgressBar
@@ -16,11 +18,14 @@ import java.util.zip.ZipInputStream
 private val logger = KotlinLogging.logger {}
 
 class CacheManagerService(
-    private val rev: Int,
-    private val cacheDir: File = File("./cache/$rev/")
+    val rev: Int,
+    private val environment: CacheEnvironment,
+    private val gameType: GameType,
+    private val cacheDir: File = File("./cache/${gameType}/${environment}/$rev/")
 ) {
     lateinit var gameCache: dev.openrune.filesystem.Cache
         private set
+
 
     lateinit var objectGameVals: List<GameValElement>
         private set
@@ -44,7 +49,7 @@ class CacheManagerService(
     }
 
     private suspend fun downloadCache() {
-        OpenRS2.downloadCacheByRevision(rev,cacheDir, listener =  object : DownloadListener {
+        OpenRS2.downloadCacheByRevision(rev,cacheDir, type = gameType, environment = environment,listener =  object : DownloadListener {
             var progressBar: ProgressBar? = null
 
             override fun onProgress(progress: Int, max: Long, current: Long) {
@@ -71,7 +76,7 @@ class CacheManagerService(
                 } else {
                     error("Error unzipping cache.")
                 }
-                OpenRS2.downloadKeysByRevision(rev, cacheDir)
+                OpenRS2.downloadKeysByRevision(revision = rev, type = gameType, directory = cacheDir, subRev = -1, environment = environment)
             }
         })
     }
@@ -82,7 +87,7 @@ class CacheManagerService(
             var entry: ZipEntry?
             while (zipInputStream.nextEntry.also { entry = it } != null) {
                 val outputFile = File(destDir, entry!!.name.substringAfterLast('/'))
-                if (!entry!!.isDirectory) {
+                if (!entry.isDirectory) {
                     outputFile.parentFile?.mkdirs()
                     FileOutputStream(outputFile).use { output -> zipInputStream.copyTo(output) }
                 }

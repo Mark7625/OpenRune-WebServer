@@ -1,5 +1,6 @@
 import com.displee.cache.CacheLibrary
-import dev.openrune.cache.CacheDelegate
+import dev.openrune.cache.tools.CacheEnvironment
+import dev.openrune.cache.tools.GameType
 import io.ktor.server.engine.*
 import io.ktor.server.netty.*
 import mu.KotlinLogging
@@ -16,11 +17,16 @@ lateinit var cacheLibrary: CacheLibrary
     private set
 
 suspend fun main(args: Array<String>) {
-    val rev = args.getOrNull(0)?.toIntOrNull() ?: 231
-    val gameType = args.getOrNull(1) ?: "OLDSCHOOL"
+    val rev = args.getOrNull(0)?.toIntOrNull() ?: -1
+    val game = args.getOrNull(1) ?: GameType.OLDSCHOOL.toString()
+    val environmentType = args.getOrNull(2) ?: CacheEnvironment.LIVE.toString()
 
-    val cacheDir = File("./cache/$rev/")
-    val cacheService = CacheManagerService(rev, cacheDir)
+    val gameType = GameType.valueOf(game)
+    val environment = CacheEnvironment.valueOf(environmentType)
+
+    val cacheDir =  File("./cache/${gameType}/${environment}/$rev/")
+
+    val cacheService = CacheManagerService(rev,environment = environment,gameType = gameType, cacheDir = cacheDir)
     cacheService.prepareCache()
 
 
