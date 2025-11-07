@@ -20,7 +20,7 @@ dependencies {
     implementation("io.ktor:ktor-server-content-negotiation:2.3.5")
     implementation("io.ktor:ktor-serialization-gson:2.3.5")
     implementation("io.ktor:ktor-server-status-pages:2.3.5")
-    implementation("dev.or2:all:2.2.9.1")
+    implementation("dev.or2:all:3.0")
     implementation("cc.ekblad:4koma:1.2.2-openrune")
 
     // JSON serialization with Gson
@@ -48,7 +48,7 @@ tasks.test {
 }
 
 kotlin {
-    jvmToolchain(17)
+    jvmToolchain(11)
 }
 
 tasks {
