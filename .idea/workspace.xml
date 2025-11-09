@@ -5,45 +5,17 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="b4394631-f700-4b5a-8ccd-b2beedc4ce63" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/MapExtractor.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/JagexColor.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/MapDefinition.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/MapImageDumper.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/MapLoader.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/loc/LocationsDefinition.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/loc/LocationsLoader.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/net/InputStream.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/region/HeightCalc.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/region/Location.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/region/Position.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/region/Region.kt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/region/RegionLoader.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.gitignore" beforeDir="false" afterPath="$PROJECT_DIR$/.gitignore" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/gradle.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/gradle.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/CacheChecksumManifest.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/CacheChecksumManifest.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/ChecksumManifestManager.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/ChecksumManifestManager.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/ExtractorFactory.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/ExtractorFactory.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/bin/main/dev/openrune/cache/WebCacheManager.kt" beforeDir="false" afterPath="$PROJECT_DIR$/bin/main/dev/openrune/cache/WebCacheManager.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/bin/main/dev/openrune/cache/extractor/osrs/MapExtractor.kt" beforeDir="false" afterPath="$PROJECT_DIR$/bin/main/dev/openrune/cache/extractor/osrs/MapExtractor.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/bin/main/dev/openrune/cache/extractor/osrs/map/region/Region.kt" beforeDir="false" afterPath="$PROJECT_DIR$/bin/main/dev/openrune/cache/extractor/osrs/map/region/Region.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/bin/main/dev/openrune/cache/util/XteaLoader.kt" beforeDir="false" afterPath="$PROJECT_DIR$/bin/main/dev/openrune/cache/util/XteaLoader.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/bin/main/dev/openrune/server/endpoints/maps/MapRoutes.kt" beforeDir="false" afterPath="$PROJECT_DIR$/bin/main/dev/openrune/server/endpoints/maps/MapRoutes.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/WebCacheManager.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/WebCacheManager.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/BaseExtractor.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/BaseExtractor.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/ConfigsExtractor.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/ConfigsExtractor.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/GameValExtractor.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/GameValExtractor.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/ModelsExtractor.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/ModelsExtractor.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/SpritesExtractor.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/SpritesExtractor.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/WebServer.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/WebServer.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/cache/ImageCache.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/cache/ImageCache.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/items/ItemInfoHandler.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/items/ItemInfoHandler.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/models/ModelInfoHandler.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/models/ModelInfoHandler.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/npcs/NpcInfoHandler.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/npcs/NpcInfoHandler.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/objects/ObjectInfoHandler.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/objects/ObjectInfoHandler.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/overlays/OverlayInfoHandler.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/overlays/OverlayInfoHandler.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/sequences/SequenceInfoHandler.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/sequences/SequenceInfoHandler.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/spotanims/SpotAnimInfoHandler.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/spotanims/SpotAnimInfoHandler.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/sprites/SpriteImageEndpoint.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/sprites/SpriteImageEndpoint.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/sprites/SpriteRoutes.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/sprites/SpriteRoutes.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/underlays/UnderlayInfoHandler.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/underlays/UnderlayInfoHandler.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/MapExtractor.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/MapExtractor.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/region/Region.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/extractor/osrs/map/region/Region.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/util/XteaLoader.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/util/XteaLoader.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/maps/MapRoutes.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/maps/MapRoutes.kt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -71,19 +43,7 @@
               <path>
                 <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
                 <item name="openrune-web-server" type="f1a62948:ProjectNode" />
-                <item name="Tasks" type="e4a08cd1:TasksNode" />
-              </path>
-              <path>
-                <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
-                <item name="openrune-web-server" type="f1a62948:ProjectNode" />
-                <item name="Tasks" type="e4a08cd1:TasksNode" />
-                <item name="application" type="c8890929:TasksNode$1" />
-              </path>
-              <path>
-                <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
-                <item name="openrune-web-server" type="f1a62948:ProjectNode" />
-                <item name="Tasks" type="e4a08cd1:TasksNode" />
-                <item name="shadow" type="c8890929:TasksNode$1" />
+                <item name="Run Configurations" type="7b0102dc:RunConfigurationsNode" />
               </path>
             </expand>
             <select />
@@ -103,7 +63,7 @@
   <component name="Git.Settings">
     <option name="RECENT_GIT_ROOT_PATH" value="$PROJECT_DIR$" />
   </component>
-  <component name="GradleScriptDefinitionsStorage" workingDir="$PROJECT_DIR$" gradleHome="C:\wrapper\dists\gradle-8.14-bin\38aieal9i53h9rfe7vjup95b9\gradle-8.14" javaHome="C:\Users\Home\.jdks\corretto-11.0.22" gradleVersion="8.14" />
+  <component name="GradleScriptDefinitionsStorage" workingDir="$PROJECT_DIR$" gradleHome="C:\Users\chris\.gradle\wrapper\dists\gradle-8.14-bin\38aieal9i53h9rfe7vjup95b9\gradle-8.14" javaHome="C:\Users\chris\.jdks\corretto-11.0.29" gradleVersion="8.14" />
   <component name="ProjectColorInfo">{
   &quot;customColor&quot;: &quot;&quot;,
   &quot;associatedIndex&quot;: 4
@@ -123,16 +83,18 @@
     "RunOnceActivity.ShowReadmeOnStart": "true",
     "RunOnceActivity.git.unshallow": "true",
     "git-widget-placeholder": "main",
+    "ignore.virus.scanning.warn.message": "true",
     "kotlin-language-version-configured": "true",
-    "last_opened_file_path": "D:/OpenRune-WebServer/src/main/kotlin/dev/openrune/cache/extractor/osrs",
+    "last_opened_file_path": "D:/OpenRune-WebServer",
     "project.structure.last.edited": "Project",
     "project.structure.proportion": "0.15527344",
     "project.structure.side.proportion": "0.2",
-    "settings.editor.selected.configurable": "reference.settingsdialog.project.gradle"
+    "settings.editor.selected.configurable": "preferences.lookFeel"
   }
 }]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
+      <recent name="D:\OpenRune-WebServer\cache\oldschool\live\235" />
       <recent name="D:\OpenRune-WebServer\src\main\kotlin\dev\openrune\cache\extractor\osrs" />
       <recent name="C:\Users\Home\Desktop\new\src\main\kotlin\dev\openrune\cache\extractor\osrs\configs" />
       <recent name="C:\Users\Home\Desktop\new\src\main\kotlin\dev\openrune\cache\extractor\osrs" />
@@ -141,7 +103,7 @@
       <recent name="dev.openrune.cache.extractor.osrs.configs" />
     </key>
   </component>
-  <component name="RunManager" selected="Gradle.new [shadowJar]">
+  <component name="RunManager" selected="Gradle.new [bootOldschool]">
     <configuration name="new [bootOldschool]" type="GradleRunConfiguration" factoryName="Gradle" temporary="true">
       <ExternalSystemSettings>
         <option name="executionName" />
@@ -226,8 +188,8 @@
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="Gradle.new [shadowJar]" />
         <item itemvalue="Gradle.new [bootOldschool]" />
+        <item itemvalue="Gradle.new [shadowJar]" />
         <item itemvalue="Gradle.new [bootSailing]" />
         <item itemvalue="Kotlin.TestKt" />
       </list>

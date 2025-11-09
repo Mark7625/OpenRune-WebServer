@@ -29,7 +29,7 @@ class WebCacheManager(
     )
 
     companion object {
-        private const val TESTING_MODE = false
+        private const val TESTING_MODE = true
         private val VERIFIED_INDICES = setOf(
             OsrsCacheIndex.GAMEVALS.id,
             OsrsCacheIndex.MODELS.id,
@@ -215,9 +215,6 @@ class WebCacheManager(
             processedFiles = it 
         }
 
-        val totalManifestFiles = extractorManager.countManifestFiles(extractorCache)
-        val manifestProgressBar = extractorManager.createManifestProgressBar(totalManifestFiles)
-        extractorManager.setSharedManifestProgressBar(extractorCache, manifestProgressBar)
 
         // Extract maps with progress reporting
         if (!(VERIFIED_INDICES.contains(MAPS) && TESTING_MODE)) {
@@ -233,6 +230,11 @@ class WebCacheManager(
                 }
             }
         }
+
+
+        val totalManifestFiles = extractorManager.countManifestFiles(extractorCache)
+        val manifestProgressBar = extractorManager.createManifestProgressBar(totalManifestFiles)
+        extractorManager.setSharedManifestProgressBar(extractorCache, manifestProgressBar)
 
         extractorManager.closeExtractors(extractorCache, manifestProgressBar)
         extractorManager.clearExtractorData(extractorCache)

@@ -17,10 +17,10 @@ class Region {
 
     private val tileHeights = Array(Z) { Array(X) { IntArray(Y) } }
     private val tileSettings = Array(Z) { Array(X) { ByteArray(Y) } }
-    private val overlayIds = Array(Z) { Array(X) { ShortArray(Y) } }
+    val overlayIds = Array(Z) { Array(X) { ShortArray(Y) } }
     private val overlayPaths = Array(Z) { Array(X) { ByteArray(Y) } }
     private val overlayRotations = Array(Z) { Array(X) { ByteArray(Y) } }
-    private val underlayIds = Array(Z) { Array(X) { ShortArray(Y) } }
+    val underlayIds = Array(Z) { Array(X) { ShortArray(Y) } }
 
     private val _locations = mutableListOf<Location>()
 
