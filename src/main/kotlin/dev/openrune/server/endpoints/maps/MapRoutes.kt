@@ -29,10 +29,8 @@ fun Route.registerMapEndpoints(config: ServerConfig) {
             call.respond(io.ktor.http.HttpStatusCode.BadRequest, "Object ID parameter is required")
             return@getDocumentedNoParams
         }
-        
-        val regionId = call.request.queryParameters["regionId"]
-        
-        mapObjectsEndpoint.findObjectsById(call, objectId, regionId)
+
+        mapObjectsEndpoint.findObjectsById(call, objectId)
     }
     
     // Route to get region data by ID - MUST come before /map/region/{regionId} to avoid route conflicts

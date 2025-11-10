@@ -5,48 +5,49 @@ import dev.openrune.cache.CacheManager
 import dev.openrune.cache.CachePathHelper
 import dev.openrune.cache.extractor.BaseExtractor
 import dev.openrune.cache.extractor.osrs.map.MapImageDumper
-import dev.openrune.cache.extractor.osrs.map.region.Location
-import dev.openrune.cache.extractor.osrs.map.region.Position
 import dev.openrune.cache.extractor.osrs.map.region.RegionLoader
 import dev.openrune.cache.gameval.GameValHandler
-import dev.openrune.cache.gameval.GameValHandler.lookup
 import dev.openrune.cache.util.XteaLoader
 import dev.openrune.definition.GameValGroupTypes
 import dev.openrune.filesystem.Cache
-import kotlinx.coroutines.async
-import kotlinx.coroutines.runBlocking
-import mu.KotlinLogging
 import kotlinx.coroutines.*
-import java.util.concurrent.atomic.AtomicInteger
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.awaitAll
+import mu.KotlinLogging
 import java.io.File
+import java.util.concurrent.atomic.AtomicInteger
 
 private val logger = KotlinLogging.logger {}
 
+data class LocationCustom(
+    val id: Int,
+    val type: Int,
+    val orientation: Int,
+    val position: Int,
+    val isDynamic: Boolean = false
+)
+
 data class RegionData(
     val id: Int,
-    var positions: List<Location> = emptyList(),
-    var totalObjects : Int = 0,
-    var overlayIds: List<List<List<Short>>> = emptyList(),
-    var underlayIds: List<List<List<Short>>> = emptyList()
+    var positions: List<LocationCustom> = emptyList(),
+    var totalObjects: Int = 0,
+    var overlayIds: Map<Int, List<Int>> = emptyMap(),
+    var underlayIds: Map<Int, List<Int>> = emptyMap()
 )
 
 class MapExtractor(config: ServerConfig, cache: Cache) : BaseExtractor(config, cache) {
 
-    private val regionLoader: RegionLoader = RegionLoader(cache)
+    private val regionLoader = RegionLoader(cache)
     private val dumper: MapImageDumper
 
-    private val gamevals = GameValHandler.readGameVal(GameValGroupTypes.LOCTYPES,cache)
+    private val mapRegionData = mutableMapOf<Int, RegionData>()
 
     init {
-
         val xteaLoc = File(
             CachePathHelper.getCacheDirectory(
                 config.gameType,
                 config.environment,
                 config.revision
-            ), "xteas.json"
+            ),
+            "xteas.json"
         )
 
         XteaLoader.load(xteaLoc)
@@ -59,8 +60,6 @@ class MapExtractor(config: ServerConfig, cache: Cache) : BaseExtractor(config, c
         extract(index, archive, file, data, null)
     }
 
-    val mapRegionData = emptyMap<Int, RegionData>().toMutableMap()
-
     fun extract(
         index: Int,
         archive: Int,
@@ -70,18 +69,27 @@ class MapExtractor(config: ServerConfig, cache: Cache) : BaseExtractor(config, c
     ) {
         val planes = 0 until 4
 
-        regionLoader.regions.forEach {
-            val regionData = RegionData(it.regionID)
+        regionLoader.regions.forEach { region ->
+            val regionData = RegionData(region.regionID)
 
-            regionData.positions = it.locations
-            regionData.totalObjects = it.locations.size
-            regionData.overlayIds = it.overlayIds.map { plane -> plane.map { it.toList() } }
-            regionData.underlayIds = it.underlayIds.map { plane -> plane.map { it.toList() } }
+            regionData.positions = region.locations.map {
+                LocationCustom(
+                    id = it.id,
+                    type = it.type,
+                    orientation = it.orientation,
+                    position = it.position.pack(),
+                    isDynamic = CacheManager.getObject(it.id)?.animationId != -1
+                )
+            }
 
-            mapRegionData[it.regionID] = regionData
+            regionData.totalObjects = region.locations.size
+            regionData.overlayIds = region.overlayIdPositions
+            regionData.underlayIds = region.underlayIdPositions
+
+            mapRegionData[region.regionID] = regionData
         }
 
-        val objectPositions: Map<Int, List<Location>> = mapRegionData.values
+        val objectPositions: Map<Int, List<LocationCustom>> = mapRegionData.values
             .flatMap { it.positions }
             .groupBy { it.id }
 
@@ -102,24 +110,21 @@ class MapExtractor(config: ServerConfig, cache: Cache) : BaseExtractor(config, c
             } else null
 
             try {
-
                 objectPositions.forEach {
                     saveJson(it.value, "maps", "objects", "${it.key}.json")
                     progress.incrementAndGet()
                 }
 
                 mapRegionData.forEach {
-                    // Use compact JSON to reduce recursion depth during serialization
                     saveJsonCompact(it.value, "maps", "regions", "${it.key}.json")
                     progress.incrementAndGet()
                 }
 
-
-                // Draw map planes
                 planes.map { plane ->
                     async(Dispatchers.IO) {
-                        //val image = dumper.drawMap(plane)
-                        //savePng(image, "maps", "full", "current-map-image-$plane.png")
+                        // Uncomment if you want to render the map planes
+                        // val image = dumper.drawMap(plane)
+                        // savePng(image, "maps", "full", "current-map-image-$plane.png")
                         progress.incrementAndGet()
                     }
                 }.awaitAll()

@@ -24,6 +24,9 @@ class Region {
 
     private val _locations = mutableListOf<Location>()
 
+    val overlayIdPositions = mutableMapOf<Int, MutableList<Int>>()
+    val underlayIdPositions = mutableMapOf<Int, MutableList<Int>>()
+
     constructor(id: Int) {
         regionID = id
         baseX = ((id shr 8) and 0xFF) shl 6
@@ -66,6 +69,29 @@ class Region {
                     overlayRotations[z][x][y] = tile.overlayRotation
                     tileSettings[z][x][y] = tile.settings
                     underlayIds[z][x][y] = tile.underlayId
+                }
+            }
+        }
+        buildOverlayUnderlayMaps()
+    }
+
+    private fun buildOverlayUnderlayMaps() {
+        for (z in 0 until Z) {
+            for (x in 0 until X) {
+                for (y in 0 until Y) {
+                    val overlayId = overlayIds[z][x][y].toInt() and 0x7FFF
+                    if (overlayId != 0) {
+                        val pos = Position(baseX + x, baseY + y, z)
+                        val packedPos = pos.pack()
+                        overlayIdPositions.computeIfAbsent(overlayId) { mutableListOf() }.add(packedPos)
+                    }
+
+                    val underlayId = underlayIds[z][x][y].toInt() and 0x7FFF
+                    if (underlayId != 0) {
+                        val pos = Position(baseX + x, baseY + y, z)
+                        val packedPos = pos.pack()
+                        underlayIdPositions.computeIfAbsent(underlayId) { mutableListOf() }.add(packedPos)
+                    }
                 }
             }
         }

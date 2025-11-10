@@ -5,6 +5,10 @@ data class Position(
     val y: Int,
     val z: Int
 ) {
+    fun pack(): Int {
+        return (z shl 28) or (x shl 14) or y
+    }
+
     companion object {
         fun fromPacked(packedPosition: Int): Position {
             return if (packedPosition == -1) {

@@ -29,7 +29,7 @@ class WebCacheManager(
     )
 
     companion object {
-        private const val TESTING_MODE = true
+        private const val TESTING_MODE = false
         private val VERIFIED_INDICES = setOf(
             OsrsCacheIndex.GAMEVALS.id,
             OsrsCacheIndex.MODELS.id,
