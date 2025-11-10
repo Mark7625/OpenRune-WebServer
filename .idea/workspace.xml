@@ -43,6 +43,17 @@
               <path>
                 <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
                 <item name="openrune-web-server" type="f1a62948:ProjectNode" />
+                <item name="Tasks" type="e4a08cd1:TasksNode" />
+              </path>
+              <path>
+                <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
+                <item name="openrune-web-server" type="f1a62948:ProjectNode" />
+                <item name="Tasks" type="e4a08cd1:TasksNode" />
+                <item name="shadow" type="c8890929:TasksNode$1" />
+              </path>
+              <path>
+                <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
+                <item name="openrune-web-server" type="f1a62948:ProjectNode" />
                 <item name="Run Configurations" type="7b0102dc:RunConfigurationsNode" />
               </path>
             </expand>
@@ -103,7 +114,7 @@
       <recent name="dev.openrune.cache.extractor.osrs.configs" />
     </key>
   </component>
-  <component name="RunManager" selected="Gradle.new [bootOldschool]">
+  <component name="RunManager" selected="Gradle.new [shadowJar]">
     <configuration name="new [bootOldschool]" type="GradleRunConfiguration" factoryName="Gradle" temporary="true">
       <ExternalSystemSettings>
         <option name="executionName" />
@@ -188,8 +199,8 @@
     </configuration>
     <recent_temporary>
       <list>
-        <item itemvalue="Gradle.new [bootOldschool]" />
         <item itemvalue="Gradle.new [shadowJar]" />
+        <item itemvalue="Gradle.new [bootOldschool]" />
         <item itemvalue="Gradle.new [bootSailing]" />
         <item itemvalue="Kotlin.TestKt" />
       </list>
