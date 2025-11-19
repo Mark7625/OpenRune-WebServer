@@ -52,14 +52,29 @@ abstract class QueryHandlerJson<T : BaseQueryParams> : QueryHandler<T>() {
         val ids = mutableSetOf<Int>()
         query.split(",").forEach { part ->
             val trimmed = part.trim()
-            if (trimmed.contains("+")) {
-                val parts = trimmed.split("+")
-                if (parts.size == 2) {
-                    val start = parts[0].trim().toIntOrNull()
-                    val end = parts[1].trim().toIntOrNull()
-                    if (start != null && end != null) {
-                        ids.addAll(start..end)
-                        return@forEach
+            when {
+                trimmed.contains("+") -> {
+                    val parts = trimmed.split("+")
+                    if (parts.size == 2) {
+                        val start = parts[0].trim().toIntOrNull()
+                        val offset = parts[1].trim().toIntOrNull()
+                        if (start != null && offset != null) {
+                            // Always treat + as range: 10+30 -> 10..40, 400+50 -> 400..450, 400+100 -> 400..500
+                            ids.addAll(start..(start + offset))
+                            return@forEach
+                        }
+                    }
+                }
+                trimmed.contains("-") -> {
+                    val parts = trimmed.split("-", limit = 2)
+                    if (parts.size == 2) {
+                        val start = parts[0].trim().toIntOrNull()
+                        val offset = parts[1].trim().toIntOrNull()
+                        if (start != null && offset != null) {
+                            // Always treat - as subtraction: 400-50 -> 350, 400-100 -> 300
+                            ids.add(start - offset)
+                            return@forEach
+                        }
                     }
                 }
             }
