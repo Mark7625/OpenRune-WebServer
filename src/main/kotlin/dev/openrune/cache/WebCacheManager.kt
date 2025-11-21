@@ -38,7 +38,7 @@ class WebCacheManager(
             OsrsCacheIndex.CONFIGS.id
         )
         private const val CACHE_INFO_FILE = "cache-info.json"
-        private const val MASTER_CHECKSUMS_FILE = "master-checksums.json"
+        private const val MASTER_CHECKSUMS_FILE = "cache-master-checksums.json"
         private const val DATA_CHECKSUM_FILE = "data.checksum"
         private const val DATA_DIR = "data"
         private const val CACHE_DIR = "cache"

@@ -20,7 +20,7 @@ dependencies {
     implementation("io.ktor:ktor-server-content-negotiation:2.3.5")
     implementation("io.ktor:ktor-serialization-gson:2.3.5")
     implementation("io.ktor:ktor-server-status-pages:2.3.5")
-    implementation("dev.or2:all:3.0")
+    implementation("dev.or2:all:2.3.0")
     implementation("cc.ekblad:4koma:1.2.2-openrune")
 
     // JSON serialization with Gson
