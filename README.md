@@ -23,6 +23,26 @@ Run the server with the following arguments:
 - `game` (optional): Game type - `OLDSCHOOL` or `RUNESCAPE3` (default: `OLDSCHOOL`)
 - `environment` (optional): Environment - `LIVE`, `BETA`, or `TEST` (default: `LIVE`)
 - `port` (optional): Network port (default: 8090)
+- `navDisplayOverrides` (optional): Comma/semicolon-separated `key=value` list for nav display-name overrides.
+
+### Nav Display Name Overrides
+
+You can override sidebar labels returned by `/cache/nav` and `/cache/gameval/groups`.
+
+Supported input formats:
+
+- CLI arg 5: `worldentity=World Entities;worldmaparea=World Map Area;spotanim=SpotAnim;inv=Inventories`
+- Env var `OPENRUNE_NAV_DISPLAY_OVERRIDES` with the same format.
+
+Examples:
+
+```bash
+# CLI argument
+./gradlew run --args="237 OLDSCHOOL LIVE 8090 worldentity=World Entities;worldmaparea=World Map Area;spotanim=SpotAnim;inv=Inventories"
+
+# Environment variable
+OPENRUNE_NAV_DISPLAY_OVERRIDES="worldentity=World Entities;worldmaparea=World Map Area;spotanim=SpotAnim;inv=Inventories" ./gradlew run --args="237 OLDSCHOOL LIVE 8090"
+```
 
 ### Examples
 

@@ -1,6 +1,5 @@
 package dev.openrune.server.zip
 
-import dev.openrune.ServerConfig
 import dev.openrune.server.EndpointRegistry
 import io.ktor.http.*
 import io.ktor.http.content.*
@@ -17,20 +16,19 @@ data class CreateZipRequest(
     val type: String
 )
 
-fun Route.registerZipEndpoints(config: ServerConfig, zipService: ZipService) {
+fun Route.registerZipEndpoints(zipService: ZipService) {
     
     // Register endpoints for documentation
     EndpointRegistry.registerEndpoint(
         method = "POST",
         path = "/zip/create",
-        description = "Create a zip file archive job for sprites, models, or textures. Returns job ID and status. If zip already exists, returns download link immediately. Progress updates available via SSE at /sse?type=ZIP_PROGRESS or polling at /zip/progress/{jobId}.",
+        description = "Create a diff-based sprites zip archive job. Returns job ID and status. If zip already exists, returns download link immediately. Progress updates available via SSE at /sse?type=ZIP_PROGRESS or polling at /zip/progress/{jobId}.",
         category = "Zip Archives",
         queryParamsClass = null,
         responseType = "application/json",
         examples = listOf(
             "/zip/create?type=sprites",
-            "/zip/create?type=models",
-            "/zip/create?type=textures"
+            "/zip/create?type=sprites&base=1&rev=100"
         )
     )
     
@@ -43,7 +41,7 @@ fun Route.registerZipEndpoints(config: ServerConfig, zipService: ZipService) {
         responseType = "application/json",
         examples = listOf(
             "/zip/progress/sprites-235",
-            "/zip/progress/models-235"
+            "/zip/progress/sprites-1-100"
         )
     )
     
@@ -55,8 +53,7 @@ fun Route.registerZipEndpoints(config: ServerConfig, zipService: ZipService) {
         queryParamsClass = null,
         responseType = "application/zip",
         examples = listOf(
-            "/zip/download/sprites-235",
-            "/zip/download/models-235"
+            "/zip/download/sprites-1-100"
         )
     )
     
@@ -68,8 +65,7 @@ fun Route.registerZipEndpoints(config: ServerConfig, zipService: ZipService) {
         queryParamsClass = null,
         responseType = "application/json",
         examples = listOf(
-            "/zip/sprites-235",
-            "/zip/models-235"
+            "/zip/sprites-1-100"
         )
     )
     
@@ -92,7 +88,25 @@ fun Route.registerZipEndpoints(config: ServerConfig, zipService: ZipService) {
                 return@post
             }
 
-            zipService.zipExists(zipType)?.let { existingJobId ->
+            val baseRev = call.request.queryParameters["base"]?.toIntOrNull()
+            val rev = call.request.queryParameters["rev"]?.toIntOrNull()
+
+            if ((baseRev != null || rev != null) && zipType !in setOf(ZipType.SPRITES, ZipType.TEXTURES)) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    mapOf("error" to "base/rev parameters are only supported for type=sprites or type=textures")
+                )
+                return@post
+            }
+            if ((baseRev == null) != (rev == null)) {
+                call.respond(
+                    HttpStatusCode.BadRequest,
+                    mapOf("error" to "Both base and rev must be provided together")
+                )
+                return@post
+            }
+
+            zipService.zipExists(zipType, baseRev, rev)?.let { existingJobId ->
                 call.respond(mapOf(
                     "jobId" to existingJobId,
                     "type" to zipType.name,
@@ -104,7 +118,7 @@ fun Route.registerZipEndpoints(config: ServerConfig, zipService: ZipService) {
                 return@post
             }
             
-            val jobId = zipService.createZip(zipType)
+            val jobId = zipService.createZip(zipType, baseRev, rev)
             
             call.respond(mapOf(
                 "jobId" to jobId,
