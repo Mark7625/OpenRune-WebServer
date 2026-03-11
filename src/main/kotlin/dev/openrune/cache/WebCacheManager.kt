@@ -61,7 +61,7 @@ class WebCacheManager(
         logger.info("Scanning cache files for changes...")
         onUpdatingDetected?.invoke(true, null, "Verifying Cache checksum")
 
-        val cache = Cache.load(File(dataDir, CACHE_DIR).toPath(), false)
+        val cache = Cache.load(File(dataDir, CACHE_DIR).toPath())
         try {
             val manifest = manifestManager.createManifest(cache)
 
