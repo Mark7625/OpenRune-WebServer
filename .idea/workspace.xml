@@ -6,13 +6,9 @@
   <component name="ChangeListManager">
     <list default="true" id="b4394631-f700-4b5a-8ccd-b2beedc4ce63" name="Changes" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/Main.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/Main.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/ServerConfig.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/ServerConfig.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/diff/ConfigDiffType.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/diff/ConfigDiffType.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/diff/ConfigSerializer.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/diff/ConfigSerializer.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/diff/DiffDumper.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/cache/diff/DiffDumper.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/cache/CacheRoutes.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/cache/CacheRoutes.kt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/diff/DiffRouteCaches.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/diff/DiffRouteCaches.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/diff/DiffRoutes.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/server/endpoints/diff/DiffRoutes.kt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -47,7 +43,19 @@
                 <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
                 <item name="openrune-web-server" type="f1a62948:ProjectNode" />
                 <item name="Tasks" type="e4a08cd1:TasksNode" />
+                <item name="application" type="c8890929:TasksNode$1" />
+              </path>
+              <path>
+                <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
+                <item name="openrune-web-server" type="f1a62948:ProjectNode" />
+                <item name="Tasks" type="e4a08cd1:TasksNode" />
                 <item name="build" type="c8890929:TasksNode$1" />
+              </path>
+              <path>
+                <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
+                <item name="openrune-web-server" type="f1a62948:ProjectNode" />
+                <item name="Tasks" type="e4a08cd1:TasksNode" />
+                <item name="shadow" type="c8890929:TasksNode$1" />
               </path>
               <path>
                 <item name="" type="6a2764b6:ExternalProjectsStructure$RootNode" />
@@ -101,7 +109,9 @@
     "Gradle.OpenRune-WebServer [:dev.openrune.cache.diff.TestKt.main()].executor": "Run",
     "Gradle.OpenRune-WebServer [:dev.openrune.cache.extractor.osrs.map.TestKt.main()].executor": "Run",
     "Gradle.OpenRune-WebServer [:dev.openrune.server.WebServerKt.main()].executor": "Run",
+    "Gradle.OpenRune-WebServer [bootOldschoolDev].executor": "Run",
     "Gradle.OpenRune-WebServer [jar].executor": "Run",
+    "Gradle.OpenRune-WebServer [shadowJar].executor": "Run",
     "Gradle.new [bootOldschool].executor": "Run",
     "Gradle.new [bootSailing].executor": "Run",
     "Gradle.new [shadowJar].executor": "Run",
@@ -129,7 +139,29 @@
       <recent name="dev.openrune.cache.extractor.osrs.configs" />
     </key>
   </component>
-  <component name="RunManager" selected="Gradle.new [bootOldschool]">
+  <component name="RunManager" selected="Gradle.OpenRune-WebServer [bootOldschoolDev]">
+    <configuration name="OpenRune-WebServer [bootOldschoolDev]" type="GradleRunConfiguration" factoryName="Gradle" temporary="true">
+      <ExternalSystemSettings>
+        <option name="executionName" />
+        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="externalSystemIdString" value="GRADLE" />
+        <option name="scriptParameters" />
+        <option name="taskDescriptions">
+          <list />
+        </option>
+        <option name="taskNames">
+          <list>
+            <option value="bootOldschoolDev" />
+          </list>
+        </option>
+        <option name="vmOptions" />
+      </ExternalSystemSettings>
+      <ExternalSystemDebugServerProcess>true</ExternalSystemDebugServerProcess>
+      <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
+      <DebugAllEnabled>false</DebugAllEnabled>
+      <RunAsTest>false</RunAsTest>
+      <method v="2" />
+    </configuration>
     <configuration name="OpenRune-WebServer [jar]" type="GradleRunConfiguration" factoryName="Gradle" temporary="true">
       <ExternalSystemSettings>
         <option name="executionName" />
@@ -142,6 +174,28 @@
         <option name="taskNames">
           <list>
             <option value="jar" />
+          </list>
+        </option>
+        <option name="vmOptions" />
+      </ExternalSystemSettings>
+      <ExternalSystemDebugServerProcess>true</ExternalSystemDebugServerProcess>
+      <ExternalSystemReattachDebugProcess>true</ExternalSystemReattachDebugProcess>
+      <DebugAllEnabled>false</DebugAllEnabled>
+      <RunAsTest>false</RunAsTest>
+      <method v="2" />
+    </configuration>
+    <configuration name="OpenRune-WebServer [shadowJar]" type="GradleRunConfiguration" factoryName="Gradle" temporary="true">
+      <ExternalSystemSettings>
+        <option name="executionName" />
+        <option name="externalProjectPath" value="$PROJECT_DIR$" />
+        <option name="externalSystemIdString" value="GRADLE" />
+        <option name="scriptParameters" />
+        <option name="taskDescriptions">
+          <list />
+        </option>
+        <option name="taskNames">
+          <list>
+            <option value="shadowJar" />
           </list>
         </option>
         <option name="vmOptions" />
@@ -181,20 +235,6 @@
         <option name="Make" enabled="true" />
       </method>
     </configuration>
-    <configuration name="TestKt" type="JetRunConfigurationType" temporary="true" nameIsGenerated="true">
-      <option name="MAIN_CLASS_NAME" value="dev.openrune.cache.diff.TestKt" />
-      <module name="openrune-web-server.main" />
-      <method v="2">
-        <option name="Make" enabled="true" />
-      </method>
-    </configuration>
-    <configuration name="WebServerKt" type="JetRunConfigurationType" temporary="true" nameIsGenerated="true">
-      <option name="MAIN_CLASS_NAME" value="dev.openrune.server.WebServerKt" />
-      <module name="openrune-web-server.main" />
-      <method v="2">
-        <option name="Make" enabled="true" />
-      </method>
-    </configuration>
     <configuration default="true" type="JetRunConfigurationType">
       <method v="2">
         <option name="Make" enabled="true" />
@@ -206,11 +246,11 @@
     </configuration>
     <recent_temporary>
       <list>
+        <item itemvalue="Gradle.OpenRune-WebServer [bootOldschoolDev]" />
+        <item itemvalue="Gradle.OpenRune-WebServer [shadowJar]" />
         <item itemvalue="Gradle.new [bootOldschool]" />
         <item itemvalue="Kotlin.DumperMainKt" />
         <item itemvalue="Gradle.OpenRune-WebServer [jar]" />
-        <item itemvalue="Kotlin.TestKt" />
-        <item itemvalue="Kotlin.WebServerKt" />
       </list>
     </recent_temporary>
   </component>

@@ -39,8 +39,11 @@ internal const val MAX_CONFIG_DELTA_CACHE_ENTRIES = 500
 internal const val MAX_AVAILABLE_REVISIONS_CACHE_ENTRIES = 50
 internal const val MAX_REVISIONS_WITH_DATA_CACHE_ENTRIES = 50
 internal const val MAX_MANIFEST_HAS_CHANGES_CACHE_ENTRIES = 2000
+internal const val MAX_CONFIG_TABLE_SEARCH_CACHE_ENTRIES = 2000
+internal const val MAX_CONFIG_ROWS_CACHE_ENTRIES = 200
 
 internal const val AVAILABLE_REVISIONS_CACHE_TTL_MS = 60_000L
+internal const val CONFIG_TABLE_SEARCH_CACHE_TTL_MS = 60 * 60 * 1000L
 
 internal data class CachedConfigContent(val hash: String, val lines: List<Map<String, Any?>>)
 
@@ -96,6 +99,27 @@ internal data class SpriteEtagCacheKey(
     val id: Int,
 )
 
+internal data class ConfigTableSearchCacheKey(
+    val game: String,
+    val environment: String,
+    val type: String,
+    val base: Int,
+    val rev: Int,
+    val mode: String,
+    val q: String,
+)
+
+internal data class CachedConfigTableSearch(
+    val expiresAtMs: Long,
+    val matchingIds: List<Int>,
+)
+
+/** Pre-built allRows list + id→row lookup, keyed by game/env/type/base/rev. */
+internal data class CachedConfigRows(
+    val allRows: List<Map<String, Any?>>,
+    val rowById: Map<Int, Map<String, Any?>>,
+)
+
 internal data class ConfigBlockDto(
     val id: Int,
     val sectionId: String,
@@ -124,6 +148,11 @@ internal data class SpriteDelta(
 /** All diff-route bounded in-memory caches + single-flight locks (one place to tune sizes). */
 internal object DiffRouteCaches {
     val configTable = LruMutexCache<String, CachedConfigTable>(MAX_CONFIG_TABLE_CACHE_ENTRIES, 128)
+    val configTableSearch = LruMutexCache<ConfigTableSearchCacheKey, CachedConfigTableSearch>(
+        MAX_CONFIG_TABLE_SEARCH_CACHE_ENTRIES,
+        512,
+    )
+    val configRows = LruMutexCache<GameEnvTypeBaseRevKey, CachedConfigRows>(MAX_CONFIG_ROWS_CACHE_ENTRIES, 64)
     val configContent = LruMutexCache<String, CachedConfigContent>(MAX_CONFIG_CONTENT_CACHE_ENTRIES, 128)
     val configContentComputeMutexes = ConcurrentHashMap<String, Mutex>()
 

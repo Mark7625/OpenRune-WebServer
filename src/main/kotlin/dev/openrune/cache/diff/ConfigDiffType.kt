@@ -255,7 +255,7 @@ sealed class ConfigDiffType<T>(
 
     data object OBJECTS : ConfigDiffType<ObjectType>(
         fileName = "objects",
-        navGamevalType = GameValGroupTypes.OBJTYPES,
+        navGamevalType = GameValGroupTypes.LOCTYPES,
         setup = {
             inTable("name" to ObjectType::name)
             searchBy(ObjectType::name)

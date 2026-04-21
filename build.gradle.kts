@@ -81,13 +81,25 @@ tasks {
             mainClass.set("dev.openrune.MainKt")
             classpath = sourceSets["main"].runtimeClasspath
             args = listOf(cacheID.toString(),gameType, environment)
-            jvmArgs("-Xmx4G","-Dopenrune.perf.logs=true")
+            jvmArgs("-Xmx8G")
         }
     }
 
-    registerBootTask("bootRunescape",  -1,"RUNESCAPE3", "LIVE")
-    registerBootTask("bootOldschool",  2518,"OLDSCHOOL", "LIVE")
-    registerBootTask("bootSailing",  -1,"OLDSCHOOL", "BETA")
+    fun registerBootTaskDev(name: String, cacheID : Int,gameType: String, environment: String) {
+        register<JavaExec>(name) {
+            group = "application"
+            description = "Boots the RuneScape cache with $gameType ($environment)"
+            mainClass.set("dev.openrune.MainKt")
+            classpath = sourceSets["main"].runtimeClasspath
+            args = listOf(cacheID.toString(),gameType, environment)
+            jvmArgs("-Xmx8G","-Dopenrune.perf.logs=true","-Dopenrune.table.logs=true")
+        }
+    }
+
+    registerBootTask("bootRunescape",    -1,   "RUNESCAPE3", "LIVE")
+    registerBootTask("bootOldschool",    2518, "OLDSCHOOL",   "LIVE")
+    registerBootTaskDev("bootOldschoolDev", 2518,   "OLDSCHOOL",   "DEV")
+    registerBootTask("bootSailing",      -1,   "OLDSCHOOL",   "BETA")
 
     register<JavaExec>("runDownloadAllCaches") {
         group = "application"

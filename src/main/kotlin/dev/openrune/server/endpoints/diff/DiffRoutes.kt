@@ -31,6 +31,11 @@ private val logger = KotlinLogging.logger {}
 private val jsonCompact = GsonBuilder().create()
 private val quotedTokenRegex = Regex("\"([^\"]+)\"")
 
+/** Enable detailed per-request table query logs via -Dopenrune.table.logs=true */
+private val TABLE_QUERY_LOGS_ENABLED: Boolean =
+    System.getProperty("openrune.table.logs")?.equals("true", ignoreCase = true) == true
+private const val CONFIG_TABLE_SEARCH_CACHE_VERSION = "v2"
+
 private val DIFF_CONFIG_TYPES = ConfigDiffType.diffTypeNames
 /** Maps frontend sectionId → backend fileName for types where they differ (e.g. "spotanim" → "spotanims"). */
 private val SECTION_ID_TO_FILE_NAME: Map<String, String> = ConfigDiffType.all
@@ -96,11 +101,7 @@ private fun ApplicationCall.openRuneCacheDebug(
     }
     if (!shouldPrint) return
 
-    val ms = "%.2f".format(elapsedMsSince(startNs))
-    val detailSuffix = if (detail.isNotBlank()) " | $detail" else ""
-    logger.info {
-        "openrune-cache $bracketTag ${ms}ms ${request.httpMethod.value} ${request.path()} route=$routeTag$detailSuffix"
-    }
+    // Header stays for clients, but suppress server log noise.
 }
 
 private fun md5HexUtf8(s: String): String {
@@ -130,6 +131,24 @@ private enum class TableSearchMode(val value: String) {
     }
 }
 
+private fun formatQueryDesc(mode: TableSearchMode?, q: String?): String {
+    if (q == null) return ""
+    return when (mode ?: TableSearchMode.NAME) {
+        TableSearchMode.NAME   -> "name=\"$q\""
+        TableSearchMode.REGEX  -> "regex=\"$q\""
+        TableSearchMode.ID     -> {
+            val isRange = q.contains("+") || q.contains("..") || q.contains(",") ||
+                (q.contains("-") && q.indexOf("-") > 0)
+            if (isRange) "range=$q" else "id=$q"
+        }
+        TableSearchMode.GAMEVAL -> {
+            val tokens = parseGamevalTokens(q)
+            if (tokens.isEmpty()) "gameval=\"$q\""
+            else "gameval=[${tokens.joinToString(", ") { if (it.exact) "\"${it.raw}\"" else it.raw }}]"
+        }
+    }
+}
+
 private fun parseIdSearch(query: String): Set<Int> {
     val ids = mutableSetOf<Int>()
     query.split(",").forEach { part ->
@@ -137,7 +156,13 @@ private fun parseIdSearch(query: String): Set<Int> {
         when {
             trimmed.contains("+") -> {
                 val (a, b) = trimmed.split("+").map { it.trim().toIntOrNull() ?: return@forEach }
-                ids.addAll(a..b)
+                ids.addAll(minOf(a, b)..maxOf(a, b))
+            }
+            trimmed.contains("..") -> {
+                val split = trimmed.split("..", limit = 2)
+                val a = split[0].trim().toIntOrNull() ?: return@forEach
+                val b = split[1].trim().toIntOrNull() ?: return@forEach
+                ids.addAll(minOf(a, b)..maxOf(a, b))
             }
             trimmed.contains("-") && trimmed.indexOf("-") > 0 -> {
                 val split = trimmed.split("-", limit = 2)
@@ -1092,71 +1117,199 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
                 val offset = (call.request.queryParameters["offset"]?.toIntOrNull() ?: 0).coerceAtLeast(0)
                 val limit  = (call.request.queryParameters["limit"]?.toIntOrNull() ?: 50).coerceIn(1, 500)
                 val qRaw   = call.request.queryParameters["q"]?.trim()?.takeIf { it.isNotBlank() }
-                val mode   = TableSearchMode.from(call.request.queryParameters["mode"] ?: call.request.queryParameters["searchMode"])
+                val mode   = TableSearchMode.from(
+                    call.request.queryParameters["mode"]
+                        ?: call.request.queryParameters["searchMode"]
+                        ?: call.request.queryParameters["queryType"]
+                        ?: call.request.queryParameters["querytype"]
+                )
+                val modeKey = (mode ?: TableSearchMode.NAME).value
 
-                val allRows: List<Map<String, Any?>> = withContext(Dispatchers.Default) {
-                    if (gameValDumpKey != null) {
-                        loadIdToNameGamevals(config, rev, gameValDumpKey).entries.sortedBy { it.key }
-                            .map { (id, name) -> mapOf("id" to id, "fields" to mapOf("name" to name)) }
-                    } else {
-                        getTypedCombinedConfig(config, type, rev).entries.sortedBy { it.key }
-                            .map { (id, snap) -> mapOf("id" to id, "fields" to typedSnapshotToJson(snap)) }
+                var rowsCached = false
+                var searchCached: Boolean? = null  // null = no query
+
+                val rowsKey = GameEnvTypeBaseRevKey(
+                    game = config.gameType.name,
+                    environment = config.environment.name,
+                    type = type,
+                    base = base,
+                    rev = rev,
+                )
+                val existingRows = DiffRouteCaches.configRows.get(rowsKey)
+                val cachedRows = if (existingRows != null) {
+                    rowsCached = true
+                    existingRows
+                } else {
+                    val built = withContext(Dispatchers.Default) {
+                        val rows = if (gameValDumpKey != null) {
+                            loadIdToNameGamevals(config, rev, gameValDumpKey).entries.sortedBy { it.key }
+                                .map { (id, name) -> mapOf("id" to id, "fields" to mapOf("name" to name)) }
+                        } else {
+                            getTypedCombinedConfig(config, type, rev).entries.sortedBy { it.key }
+                                .map { (id, snap) -> mapOf("id" to id, "fields" to typedSnapshotToJson(snap)) }
+                        }
+                        val byId = rows.mapNotNull { row -> (row["id"] as? Int)?.let { it to row } }.toMap()
+                        CachedConfigRows(allRows = rows, rowById = byId)
                     }
+                    DiffRouteCaches.configRows.put(rowsKey, built)
+                    built
                 }
+                val allRows = cachedRows.allRows
+                val rowById = cachedRows.rowById
+                val sourceHash = md5HexUtf8(
+                    "$type|$base|$rev|${allRows.size}|${allRows.firstOrNull()?.get("id") ?: -1}|${allRows.lastOrNull()?.get("id") ?: -1}"
+                )
 
-                val filtered: List<Map<String, Any?>> = run {
-                    val q = qRaw ?: return@run allRows
-                    when (mode) {
-                        null, TableSearchMode.NAME -> {
-                            val qLower = q.lowercase()
-                            allRows.filter { row ->
-                                if (row["id"]?.toString()?.contains(qLower) == true) return@filter true
-                                @Suppress("UNCHECKED_CAST")
-                                val fields = row["fields"] as? Map<String, Any?> ?: return@filter false
-                                fields.any { (k, v) -> k.lowercase().contains(qLower) || v?.toString()?.lowercase()?.contains(qLower) == true }
-                            }
-                        }
-                        TableSearchMode.ID -> {
-                            val ids = parseIdSearch(q)
-                            if (ids.isEmpty()) emptyList() else allRows.filter { (it["id"] as? Int) in ids }
-                        }
-                        TableSearchMode.REGEX -> {
-                            val regex = try { Regex(q, setOf(RegexOption.IGNORE_CASE)) } catch (_: Exception) { return@run emptyList() }
-                            allRows.filter { row ->
-                                @Suppress("UNCHECKED_CAST")
-                                val fields = row["fields"] as? Map<String, Any?> ?: return@filter false
-                                fields.any { (k, v) -> regex.containsMatchIn(k) || (v != null && regex.containsMatchIn(v.toString())) }
-                            }
-                        }
-                        TableSearchMode.GAMEVAL -> {
-                            val groupName = gameValDumpKey ?: gamevalGroupNameForConfigType(type)
-                            if (groupName == null) {
+                val searchCacheKey = if (qRaw == null) null else ConfigTableSearchCacheKey(
+                    game = config.gameType.name,
+                    environment = config.environment.name,
+                    type = type,
+                    base = base,
+                    rev = rev,
+                    mode = "$modeKey:$CONFIG_TABLE_SEARCH_CACHE_VERSION",
+                    q = qRaw,
+                )
+                val nowMs = System.currentTimeMillis()
+                val cachedSearch = searchCacheKey
+                    ?.let { DiffRouteCaches.configTableSearch.get(it) }
+                    ?.takeIf { it.expiresAtMs > nowMs }
+
+                val filteredIds: List<Int>? = when {
+                    qRaw == null -> null
+                    cachedSearch != null -> {
+                        searchCached = true
+                        cachedSearch.matchingIds
+                    }
+                    else -> {
+                        val q = qRaw
+                        val computed = when (mode ?: TableSearchMode.NAME) {
+                            TableSearchMode.NAME -> {
                                 val qLower = q.lowercase()
-                                allRows.filter { row ->
+                                allRows.mapNotNull { row ->
+                                    val id = row["id"] as? Int ?: return@mapNotNull null
+                                    if (id.toString().contains(qLower)) return@mapNotNull id
                                     @Suppress("UNCHECKED_CAST")
-                                    val fields = row["fields"] as? Map<String, Any?> ?: return@filter false
-                                    fields["name"]?.toString()?.lowercase()?.contains(qLower) == true
+                                    val fields = row["fields"] as? Map<String, Any?> ?: return@mapNotNull null
+                                    val nameValue = fields["name"]?.toString()?.trim().orEmpty()
+                                    if (nameValue.isNotEmpty() && nameValue.lowercase().contains(qLower)) id else null
                                 }
-                            } else {
-                                val tokens = parseGamevalTokens(q)
-                                if (tokens.isEmpty()) return@run emptyList()
-                                val idToLower = loadIdToLowerNameGamevals(config, rev, groupName)
-                                val exactTokens = tokens.filter { it.exact }.map { it.raw.trim().lowercase() }.toHashSet()
-                                val fuzzyTokens = tokens.filter { !it.exact }.map { it.raw.trim().lowercase() }
-                                val matchingIds = idToLower.filter { (_, n) ->
-                                    exactTokens.contains(n) || fuzzyTokens.any { t -> n.contains(t) }
-                                }.keys
-                                if (matchingIds.isEmpty()) emptyList() else allRows.filter { (it["id"] as? Int) in matchingIds }
+                            }
+                            TableSearchMode.ID -> {
+                                val ids = parseIdSearch(q)
+                                if (ids.isEmpty()) emptyList() else allRows.mapNotNull { row ->
+                                    val id = row["id"] as? Int ?: return@mapNotNull null
+                                    if (id in ids) id else null
+                                }
+                            }
+                            TableSearchMode.REGEX -> {
+                                val regex = try {
+                                    Regex(q, setOf(RegexOption.IGNORE_CASE))
+                                } catch (_: Exception) {
+                                    null
+                                }
+                                if (regex == null) {
+                                    emptyList()
+                                } else {
+                                    allRows.mapNotNull { row ->
+                                        val id = row["id"] as? Int ?: return@mapNotNull null
+                                        @Suppress("UNCHECKED_CAST")
+                                        val fields = row["fields"] as? Map<String, Any?> ?: return@mapNotNull null
+                                        val match = fields.values.any { v ->
+                                            val text = v?.toString()?.trim().orEmpty()
+                                            text.isNotEmpty() && regex.containsMatchIn(text)
+                                        }
+                                        if (match) id else null
+                                    }
+                                }
+                            }
+                            TableSearchMode.GAMEVAL -> {
+                                val groupName = gameValDumpKey ?: gamevalGroupNameForConfigType(type)
+                                if (groupName == null) {
+                                    val qLower = q.lowercase()
+                                    allRows.mapNotNull { row ->
+                                        val id = row["id"] as? Int ?: return@mapNotNull null
+                                        @Suppress("UNCHECKED_CAST")
+                                        val fields = row["fields"] as? Map<String, Any?> ?: return@mapNotNull null
+                                        if (fields["name"]?.toString()?.lowercase()?.contains(qLower) == true) id else null
+                                    }
+                                } else {
+                                    val tokens = parseGamevalTokens(q)
+                                    if (tokens.isEmpty()) emptyList()
+                                    else {
+                                        val idToLower = loadIdToLowerNameGamevals(config, rev, groupName)
+                                        val exactTokens = tokens.filter { it.exact }.map { it.raw.trim().lowercase() }.toHashSet()
+                                        val fuzzyTokens = tokens.filter { !it.exact }.map { it.raw.trim().lowercase() }
+                                        val matchingIds = idToLower.filter { (_, n) ->
+                                            exactTokens.contains(n) || fuzzyTokens.any { t -> n.contains(t) }
+                                        }.keys.toHashSet()
+                                        if (matchingIds.isEmpty()) emptyList()
+                                        else allRows.mapNotNull { row ->
+                                            val id = row["id"] as? Int ?: return@mapNotNull null
+                                            if (id in matchingIds) id else null
+                                        }
+                                    }
+                                }
                             }
                         }
+
+                        if (searchCacheKey != null) {
+                            searchCached = false
+                            DiffRouteCaches.configTableSearch.put(
+                                searchCacheKey,
+                                CachedConfigTableSearch(
+                                    expiresAtMs = nowMs + CONFIG_TABLE_SEARCH_CACHE_TTL_MS,
+                                    matchingIds = computed,
+                                )
+                            )
+                        }
+                        computed
                     }
                 }
 
+                val filtered = if (filteredIds == null) allRows else filteredIds.mapNotNull { rowById[it] }
                 val total = filtered.size
                 val page = if (offset >= total) emptyList() else filtered.drop(offset).take(limit)
-                val hash = md5HexUtf8(jsonCompact.toJson(mapOf("total" to total, "rows" to page)))
+                val elapsedMs = (System.nanoTime() - cacheLogStartNs) / 1_000_000
+                val queryHash = md5HexUtf8("$type|$base|$rev|$modeKey|${qRaw ?: ""}")
+                val hash = md5HexUtf8(
+                    jsonCompact.toJson(
+                        mapOf(
+                            "sourceHash" to sourceHash,
+                            "queryHash" to queryHash,
+                            "offset" to offset,
+                            "limit" to limit,
+                            "total" to total,
+                            "rowIds" to page.mapNotNull { it["id"] as? Int },
+                        )
+                    )
+                )
+                val clientCacheHit = clientHash != null && clientHash == hash
+                val cacheSource = when {
+                    clientCacheHit -> "CLIENT"
+                    rowsCached || searchCached == true -> "SERVER"
+                    else -> "NONE"
+                }
+                if (TABLE_QUERY_LOGS_ENABLED) {
+                    logger.info {
+                        buildString {
+                            append("[diff/config/table] $type")
+                            append(" | base=$base  rev=$rev")
+                            val queryDesc = formatQueryDesc(mode, qRaw)
+                            if (queryDesc.isNotEmpty()) append(" | $queryDesc")
+                            append(" | cache=$cacheSource")
+                            append(" | rows=${if (rowsCached) "cached" else "loaded"}(${allRows.size})")
+                            when (searchCached) {
+                                true  -> append("  search=cached(${filteredIds?.size ?: 0} ids)")
+                                false -> append("  search=computed(${filteredIds?.size ?: 0} ids)")
+                                null  -> { /* no query */ }
+                            }
+                            append(" | total=$total  page=${page.size}  offset=$offset  limit=$limit")
+                            append(" | ${elapsedMs}ms")
+                        }
+                    }
+                }
                 call.response.header(HttpHeaders.ETag, "\"$hash\"")
-                if (clientHash != null && clientHash == hash) {
+                if (clientCacheHit) {
                     call.openRuneCacheDebug(CachePayloadOutcome.NOT_MODIFIED_NO_BODY, "diff/config/table", cacheLogStartNs, "INM=ETag type=$type")
                     call.respond(HttpStatusCode.NotModified)
                     return@get
@@ -1164,7 +1317,10 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
                 call.openRuneCacheDebug(CachePayloadOutcome.FULL_BODY, "diff/config/table", cacheLogStartNs, "type=$type")
                 call.respond(buildMap {
                     put("base", base); put("rev", rev); put("type", type)
-                    put("offset", offset); put("limit", limit); put("total", total); put("rows", page); put("hash", hash)
+                    put("mode", modeKey); put("q", qRaw ?: "")
+                    put("offset", offset); put("limit", limit); put("total", total); put("rows", page)
+                    put("hash", hash); put("queryHash", queryHash); put("sourceHash", sourceHash)
+                    put("cache", if (cachedSearch != null) "hit" else if (qRaw == null) "none" else "miss")
                 })
             } catch (e: Exception) {
                 logger.error(e) { "diff config table failed: ${e.message}" }
