@@ -2,10 +2,13 @@ package dev.openrune.cache.diff
 
 import dev.openrune.OsrsCacheProvider
 import dev.openrune.ServerConfig
+import dev.openrune.cache.CLIENTSCRIPT
 import dev.openrune.cache.CacheDownloader
 import dev.openrune.cache.CachePathHelper
 import dev.openrune.cache.ChecksumManifestManager
 import dev.openrune.cache.CacheManager
+import dev.openrune.cache.filestore.definition.ComponentDecoder
+import dev.openrune.cache.filestore.definition.InterfaceType
 import dev.openrune.cache.gameval.GameValElement
 import dev.openrune.cache.filestore.definition.SpriteDecoder
 import dev.openrune.cache.gameval.GameValHandler
@@ -56,6 +59,8 @@ import java.io.File
 import java.io.ByteArrayOutputStream
 import java.security.MessageDigest
 import java.net.URL
+import java.util.Base64
+import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
 import java.io.ByteArrayInputStream
 import javax.imageio.ImageIO
@@ -371,6 +376,7 @@ class DiffDumper(
         val structTypes: Map<Int, StructType>,
         val varClanTypes: Map<Int, VarClanType>,
         val varClientTypes: Map<Int, VarClientType>,
+        val interfaceTypes: Map<Int, InterfaceType>,
     )
 
     private fun readGamevals(cache: Cache, rev: Int): Map<GameValGroupTypes, List<GameValElement>> {
@@ -406,6 +412,8 @@ class DiffDumper(
     private fun decodeConfigs(cache: Cache, rev: Int): DecodedConfigs {
         fun <T> load(loader: (MutableMap<Int, T>) -> Unit): Map<Int, T> =
             mutableMapOf<Int, T>().also(loader)
+        val ifaceMap = mutableMapOf<Int, InterfaceType>()
+        ComponentDecoder(cache, rev).load(ifaceMap)
         return DecodedConfigs(
             invTypes      = load { OsrsCacheProvider.InventoryDecoder().load(cache, it) },
             overlayTypes  = load { OsrsCacheProvider.OverlayDecoder().load(cache, it) },
@@ -427,6 +435,7 @@ class DiffDumper(
             structTypes   = load { OsrsCacheProvider.StructDecoder().load(cache, it) },
             varClanTypes  = load { OsrsCacheProvider.VarClanDecoder().load(cache, it) },
             varClientTypes = load { OsrsCacheProvider.VarClientDecoder().load(cache, it) },
+            interfaceTypes = ifaceMap,
         )
     }
 
@@ -454,7 +463,58 @@ class DiffDumper(
         ConfigDiffType.STRUCTS.fileName   to ConfigSerializer.serializeAll(ConfigDiffType.STRUCTS,  decoded.structTypes,   gamevalData, paramType),
         ConfigDiffType.VARCLAN.fileName   to ConfigSerializer.serializeAll(ConfigDiffType.VARCLAN,  decoded.varClanTypes,  gamevalData, paramType),
         ConfigDiffType.VARCLIENT.fileName to ConfigSerializer.serializeAll(ConfigDiffType.VARCLIENT,decoded.varClientTypes, gamevalData, paramType),
+        ConfigDiffType.INTERFACES.fileName to ConfigSerializer.serializeAll(ConfigDiffType.INTERFACES, buildInterfaceEntries(decoded.interfaceTypes), gamevalData, paramType),
     )
+
+    private fun buildInterfaceEntries(interfaces: Map<Int, InterfaceType>): Map<Int, InterfaceEntry> =
+        interfaces.mapValues { (_, iface) ->
+            InterfaceEntry(
+                name = runCatching { iface.internalName }.getOrNull(),
+                componentCount = iface.components.size,
+                hash = iface.computeIdentityHash(),
+                components = iface.components,
+            )
+        }
+
+    private fun buildInterfaceManifest(
+        interfaces: Map<Int, InterfaceType>,
+        gamevalData: Map<GameValGroupTypes, List<GameValElement>>,
+    ): List<InterfaceManifestEntry> {
+        val interfaceNames = gamevalData[GameValGroupTypes.IFTYPES]
+            .orEmpty()
+            .associate { it.id to it.name }
+        return interfaces.entries
+            .sortedBy { it.key }
+            .map { (interfaceId, iface) ->
+                InterfaceManifestEntry(
+                    interfaceId = interfaceId,
+                    gameval = interfaceNames[interfaceId],
+                    iflegacy = computeIfLegacy(iface),
+                )
+            }
+    }
+
+    private fun computeIfLegacy(interfaceType: InterfaceType): Boolean? {
+        val comps = interfaceType.components.values
+        if (comps.isEmpty()) return null
+        val rootLayer = if (comps.any { it.layer == -1 }) -1 else interfaceType.id
+        val root = comps
+            .asSequence()
+            .filter { it.layer == rootLayer }
+            .sortedBy { it.id }
+            .firstOrNull() ?: return null
+        return !root.v3
+    }
+
+    private fun readClientScripts(cache: Cache): Map<Int, ByteArray> {
+        val out = LinkedHashMap<Int, ByteArray>()
+        cache.archives(CLIENTSCRIPT).forEach { scriptId ->
+            cache.data(CLIENTSCRIPT, scriptId)?.let { raw ->
+                out[scriptId] = raw
+            }
+        }
+        return out
+    }
 
     private fun serverConfigForRevision(rev: Int, cacheId: Int = 0): ServerConfig {
         return ServerConfig(gameType, cacheId, environment, 0).also { it.revision = rev }
@@ -514,17 +574,39 @@ class DiffDumper(
         configs: Map<String, Map<Int, DefinitionSnapshot>>,
         gameval: Map<String, Map<Int, CacheBinaryFormat.GamevalExtra>>,
         sprites: Map<Int, ByteArray>,
+        spriteMetadata: Map<Int, List<CacheBinaryFormat.IndexedSpriteMeta>>,
         mapData: ExtractedMapData,
         xteasByRegion: Map<Int, IntArray>,
+        interfaceManifest: List<InterfaceManifestEntry>,
+        clientScripts: Map<Int, ByteArray>,
     ): File {
         val binFile = CachePathHelper.getDiffBinaryFile(gameType, environment, rev)
         CacheBinaryFormat.writeToFile(
             file = binFile, revision = rev, openRs2CacheId = openRs2CacheId?.toLong(), manifest = manifest, configs = configs,
-            gameval = gameval, sprites = sprites,
+            gameval = gameval, sprites = sprites, spriteMetadata = spriteMetadata,
             mapObjects = mapData.objectPositions, mapRegions = mapData.regions,
             xteasByRegion = xteasByRegion,
+            interfaceManifest = interfaceManifest,
+            clientScripts = clientScripts,
         )
         return binFile
+    }
+
+    private fun spriteTypeMetadata(st: SpriteType): List<CacheBinaryFormat.IndexedSpriteMeta> {
+        return st.sprites.map { sprite ->
+            CacheBinaryFormat.IndexedSpriteMeta(
+                offsetX = sprite.offsetX,
+                offsetY = sprite.offsetY,
+                width = sprite.width,
+                height = sprite.height,
+                averageColor = sprite.averageColor,
+                subHeight = sprite.subHeight,
+                subWidth = sprite.subWidth,
+                alphaBase64 = sprite.alpha?.let { alpha -> Base64.getEncoder().encodeToString(alpha) },
+                rasterBase64 = Base64.getEncoder().encodeToString(sprite.raster),
+                palette = sprite.palette.toList(),
+            )
+        }
     }
 
 
@@ -543,10 +625,12 @@ class DiffDumper(
 
             progress(8, "Decoding sprites")
             val spriteBytes = mutableMapOf<Int, ByteArray>()
+            val spriteMetadata = mutableMapOf<Int, List<CacheBinaryFormat.IndexedSpriteMeta>>()
             val spriteTypesMap = mutableMapOf<Int, SpriteType>()
             SpriteDecoder().load(cache, spriteTypesMap)
             spriteTypesMap.values.forEach { st ->
                 ByteArrayOutputStream().use { out -> ImageIO.write(st.getSprite(true), "png", out); spriteBytes[st.id] = out.toByteArray() }
+                spriteMetadata[st.id] = spriteTypeMetadata(st)
             }
             val allSpriteIds = spriteBytes.keys.sorted()
             progress(30, "Sprites decoded (${allSpriteIds.size})")
@@ -558,9 +642,11 @@ class DiffDumper(
             progress(34, "Decoding configs")
             val decodedConfigs = decodeConfigs(cache, 1)
             val configs = buildTypedConfigs(decodedConfigs, gamevalData)
+            val interfaceManifest = buildInterfaceManifest(decodedConfigs.interfaceTypes, gamevalData)
             progress(60, "Configs decoded")
 
             val gameval = buildGamevalExtras(gamevalData)
+            val clientScripts = readClientScripts(cache)
             val configSummaries = ConfigDiffType.diffTypeNames.associateWith { type ->
                 val ids = configs[type]?.keys?.sorted() ?: emptyList()
                 ConfigDiffSummary(added = ids, removed = emptyList(), changed = emptyList())
@@ -579,7 +665,19 @@ class DiffDumper(
             )
             manifestManager.saveManifest(checksumManifest, File(cacheDir, "cache-master-checksums.json"))
             progress(96, "Writing binary")
-            val binFile = writeDiffBinaryForRevision(1, preferredOpenRs2CacheId, diffManifest, configs, gameval, spriteBytes, mapData, xteasByRegion)
+            val binFile = writeDiffBinaryForRevision(
+                1,
+                preferredOpenRs2CacheId,
+                diffManifest,
+                configs,
+                gameval,
+                spriteBytes,
+                spriteMetadata,
+                mapData,
+                xteasByRegion,
+                interfaceManifest,
+                clientScripts,
+            )
             val ms = (System.nanoTime() - t0) / 1_000_000.0
             progress(100, "Done -> ${binFile.name} (${ms.toLong()}ms)")
         }
@@ -619,10 +717,12 @@ class DiffDumper(
             // Sprites
             progress(28, "Decoding sprites")
             val currentSprites = mutableMapOf<Int, ByteArray>()
+            val currentSpriteMetadata = mutableMapOf<Int, List<CacheBinaryFormat.IndexedSpriteMeta>>()
             val spriteTypesMap = mutableMapOf<Int, SpriteType>()
             SpriteDecoder().load(cache, spriteTypesMap)
             spriteTypesMap.values.forEach { st ->
                 ByteArrayOutputStream().use { out -> ImageIO.write(st.getSprite(true), "png", out); currentSprites[st.id] = out.toByteArray() }
+                currentSpriteMetadata[st.id] = spriteTypeMetadata(st)
             }
             val baseSprites   = baseDecoded.sprites
             val baseSha       = baseDecoded.spriteSha256
@@ -634,6 +734,7 @@ class DiffDumper(
                 .filter { id -> spriteDiffers(baseSprites[id]!!, currentSprites[id]!!, baseSha[id]) }
                 .sorted()
             val deltaSprites  = currentSprites.filterKeys { it in spriteAdded || it in spriteChanged }
+            val deltaSpriteMetadata = currentSpriteMetadata.filterKeys { it in spriteAdded || it in spriteChanged }
             progress(42, "+${spriteAdded.size}/-${spriteRemoved.size}/~${spriteChanged.size} sprites")
 
             // Gamevals
@@ -641,10 +742,12 @@ class DiffDumper(
             applyDefinitionContext(cache, rev, gamevalData)
             val gameval = buildGamevalExtras(gamevalData)
 
-            // Configs
+            // Configs (includes interfaces via decodeConfigs)
             progress(55, "Decoding configs")
             val decoded = decodeConfigs(cache, rev)
             val currentConfigs = buildTypedConfigs(decoded, gamevalData)
+            val interfaceManifest = buildInterfaceManifest(decoded.interfaceTypes, gamevalData)
+            val clientScripts = readClientScripts(cache)
             progress(72, "Building delta")
 
             val baseConfigs = baseDecoded.configs
@@ -674,7 +777,19 @@ class DiffDumper(
             progress(95, "Extracting map data")
             val (xteasByRegion, mapData) = extractMapDataForRevision(rev, cache, preferredOpenRs2CacheId, barUpdater, ::progress, 95, 4)
             progress(99, "Writing binary")
-            val binFile = writeDiffBinaryForRevision(rev, preferredOpenRs2CacheId, diffManifest, deltaConfigs, gameval, deltaSprites, mapData, xteasByRegion)
+            val binFile = writeDiffBinaryForRevision(
+                rev,
+                preferredOpenRs2CacheId,
+                diffManifest,
+                deltaConfigs,
+                gameval,
+                deltaSprites,
+                deltaSpriteMetadata,
+                mapData,
+                xteasByRegion,
+                interfaceManifest,
+                clientScripts,
+            )
             val ms = (System.nanoTime() - t0) / 1_000_000.0
             if (barUpdater == null) onProgress(
                 "Rev $rev: done -> ${binFile.name} " +

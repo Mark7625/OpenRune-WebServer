@@ -2,6 +2,7 @@ package dev.openrune.cache.diff
 
 import dev.openrune.definition.GameValGroupTypes
 import dev.openrune.definition.Recolourable
+import dev.openrune.definition.type.widget.ComponentType
 import dev.openrune.definition.type.InventoryType
 import dev.openrune.definition.type.ItemType
 import dev.openrune.definition.type.EnumType
@@ -24,6 +25,18 @@ import dev.openrune.definition.type.WorldEntityType
 import dev.openrune.definition.type.WorldMapAreaType
 import java.util.LinkedHashMap
 import kotlin.reflect.KProperty1
+
+/**
+ * Diff/binary entry for an [InterfaceType].
+ * [components] is serialized as a JSON blob so the full component data is stored in the .bin.
+ * [hash] is a stable identity hash used to detect any component-level change at diff time.
+ */
+data class InterfaceEntry(
+    val name: String?,
+    val componentCount: Int,
+    val hash: Long,
+    val components: Map<Int, ComponentType>,
+)
 
 enum class NavCategory { ARCHIVE, CONFIG }
 
@@ -421,6 +434,20 @@ sealed class ConfigDiffType<T>(
         setup = { inTable("persist" to VarClientType::persist,) },
     )
 
+    data object INTERFACES : ConfigDiffType<InterfaceEntry>(
+        fileName = "interfaces",
+        sectionId = "interfaces",
+        navLabel = "Interfaces",
+        navGamevalType = GameValGroupTypes.IFTYPES,
+        setup = {
+            inTable(
+                "name"       to InterfaceEntry::name,
+                "components" to InterfaceEntry::componentCount,
+            )
+            searchBy(InterfaceEntry::name, SearchMode.NAME, SearchMode.REGEX)
+        }
+    )
+
     companion object {
         val allConfigs: List<ConfigDiffType<*>>
             get() = listOf(
@@ -443,6 +470,7 @@ sealed class ConfigDiffType<T>(
                 STRUCTS,
                 VARCLAN,
                 VARCLIENT,
+                INTERFACES,
             )
 
         val allArchives: List<ConfigDiffType<*>>

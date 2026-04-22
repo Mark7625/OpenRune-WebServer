@@ -1,14 +1,21 @@
 package dev.openrune.server.endpoints.diff
 
 import com.google.gson.GsonBuilder
+import com.google.gson.JsonParser
 import dev.openrune.ServerConfig
+import dev.openrune.cache.CachePathHelper
 import dev.openrune.util.json
 import dev.openrune.cache.diff.ConfigDiffType
 import dev.openrune.cache.diff.DiffBinaryCache
+import dev.openrune.cache.diff.CacheBinaryFormat
 import dev.openrune.cache.tools.OpenRS2
+import dev.openrune.cache.filestore.definition.SpriteDecoder
 import dev.openrune.cache.diff.DefinitionSnapshot
 import dev.openrune.cache.diff.FieldEntry
+import dev.openrune.cache.diff.InterfaceManifestEntry
 import dev.openrune.definition.GameValGroupTypes
+import dev.openrune.definition.type.SpriteType
+import dev.openrune.filesystem.Cache
 import dev.openrune.server.EndpointRegistry
 import io.ktor.http.ContentType
 import io.ktor.http.HttpHeaders
@@ -23,6 +30,7 @@ import mu.KotlinLogging
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.security.MessageDigest
+import java.util.Base64
 import java.util.LinkedHashMap
 import java.util.concurrent.ConcurrentHashMap
 import javax.imageio.ImageIO
@@ -54,6 +62,7 @@ private const val OPENRUNE_CACHE_LOG_DEDUPE_MS = 300L
 
 private val openRuneCacheLogDedupeLock = Any()
 private val openRuneCacheLogLastNs = HashMap<String, Long>(128)
+private val liveSpriteTypeCache = ConcurrentHashMap<String, Map<Int, SpriteType>>()
 
 private enum class CachePayloadOutcome {
     /** HTTP 304 — If-None-Match matched; response has no body (client keeps its copy). */
@@ -111,6 +120,28 @@ private fun md5HexUtf8(s: String): String {
 
 private fun parseIfNoneMatch(raw: String?): String? =
     raw?.trim()?.removePrefix("W/")?.removeSurrounding("\"")
+
+private fun liveSpriteCacheKey(config: ServerConfig, rev: Int): String =
+    "${config.gameType.name}:${config.environment.name}:$rev"
+
+private fun loadSpriteTypesForRevision(config: ServerConfig, rev: Int): Map<Int, SpriteType>? {
+    val key = liveSpriteCacheKey(config, rev)
+    liveSpriteTypeCache[key]?.let { return it }
+
+    val cacheDir = CachePathHelper.getCacheDirectory(config.gameType, config.environment, rev)
+    val cachePath = File(cacheDir, "data/cache")
+    if (!cachePath.exists()) return null
+
+    val loaded = runCatching {
+        val cache = Cache.load(cachePath.toPath())
+        val out = mutableMapOf<Int, SpriteType>()
+        SpriteDecoder().load(cache, out)
+        out.toMap()
+    }.getOrNull() ?: return null
+
+    liveSpriteTypeCache[key] = loaded
+    return loaded
+}
 
 private fun gameEnvBaseRevKey(config: ServerConfig, base: Int, rev: Int): GameEnvBaseRevKey =
     GameEnvBaseRevKey(
@@ -207,6 +238,7 @@ private fun gamevalGroupNameForConfigType(type: String): String? {
         "spotanims" -> "spotanims"
         "sprites" -> "sprites"
         "components" -> "components"
+        "interfaces" -> "components"
         "varp" -> "varp"
         "varbit" -> "varbits"
         "varclient" -> "varcs"
@@ -425,6 +457,23 @@ private fun getSectionSupportManifest(config: ServerConfig, rev: Int): Map<Strin
             "configs" to unsupportedConfigs,
         ),
     )
+}
+
+private fun getInterfaceManifest(config: ServerConfig, rev: Int): List<InterfaceManifestEntry> {
+    val clamped = rev.coerceIn(1, MAX_DIFF_REV)
+    val decoded = DiffBinaryCache.getDecodedRev(config, clamped)
+    if (decoded?.interfaceManifest?.isNotEmpty() == true) {
+        return decoded.interfaceManifest.sortedBy { it.interfaceId }
+    }
+    val interfaceIds = getTypedCombinedConfig(config, ConfigDiffType.INTERFACES.fileName, clamped).keys.sorted()
+    val gamevals = loadIdToNameGamevals(config, clamped, "components")
+    return interfaceIds.map { id ->
+        InterfaceManifestEntry(
+            interfaceId = id,
+            gameval = gamevals[id],
+            iflegacy = null,
+        )
+    }
 }
 
 private fun availableRevisionsFromOpenRS2(config: ServerConfig): List<Int> {
@@ -663,6 +712,15 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
         "image/png",
         listOf("/sprites?id=447&base=1&rev=236")
     )
+    EndpointRegistry.registerEndpoint(
+        "GET",
+        "/sprites/raw",
+        "Sprite raw metadata endpoint (IndexedSprite fields, excluding raster/palette). Query: id, base, rev, source.",
+        "Diff",
+        null,
+        "application/json",
+        listOf("/sprites/raw?id=447&base=1&rev=236")
+    )
 
     listOf(
         Triple("/diff/revisions", "List revisions with non-empty binary diff data.", listOf("/diff/revisions")),
@@ -672,6 +730,9 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
             "Binary diff manifest (added/removed/changed ids).",
             listOf("/diff/manifest/100"),
         ),
+        Triple("/diff/interface/manifest", "Interface manifest (interfaceId, gameval, iflegacy). Query: rev.", listOf("/diff/interface/manifest?rev=236")),
+        Triple("/diff/clientscripts/manifest", "Client script ids and byte lengths from binary diff. Query: rev.", listOf("/diff/clientscripts/manifest?rev=236")),
+        Triple("/diff/clientscript/{id}", "Client script raw bytes (base64) from binary diff. Query: rev.", listOf("/diff/clientscript/1234?rev=236")),
         Triple("/diff/gamevals/manifest", "Gameval group availability by revision. Query: rev.", listOf("/diff/gamevals/manifest?rev=236")),
             Triple("/diff/support/manifest", "Archive/config support by revision from decoded binary content. Query: rev.", listOf("/diff/support/manifest?rev=236")),
         Triple("/diff/config-types", "List available config diff types.", listOf("/diff/config-types")),
@@ -680,8 +741,10 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
         Triple("/diff/delta/summary", "Config delta summary counts by type between base and rev.", listOf("/diff/delta/summary?base=1&rev=100")),
         Triple("/diff/delta/sprites/summary", "Delta sprite counts between base and rev.", listOf("/diff/delta/sprites/summary?base=1&rev=100")),
         Triple("/diff/sprite/{id}", "Serve sprite PNG. Query: base, rev, source.", listOf("/diff/sprite/0?rev=100")),
+        Triple("/diff/sprite/{id}/raw", "Serve sprite raw metadata JSON. Query: base, rev, source.", listOf("/diff/sprite/0/raw?rev=100")),
         Triple("/diff/config/{type}/content", "Merged binary config content for a type. Query: base, rev.", listOf("/diff/config/items/content?rev=236")),
-        Triple("/diff/config/{type}/table", "Paginated binary config table rows. Query: base, rev, offset, limit, q.", listOf("/diff/config/items/table?rev=236&offset=0&limit=50"))
+        Triple("/diff/config/{type}/table", "Paginated binary config table rows. Query: base, rev, offset, limit, q.", listOf("/diff/config/items/table?rev=236&offset=0&limit=50")),
+        Triple("/interface/{id}", "Get full InterfaceType (all components) by interface id. Query: rev.", listOf("/interface/0?rev=236")),
     ).forEach { (path, desc, examples) ->
         EndpointRegistry.registerEndpoint("GET", path, desc, "Diff", null, "application/json", examples)
     }
@@ -746,6 +809,36 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
         call.respondSprite(config, id)
     }
 
+    get("/sprites/raw") {
+        val id = call.request.queryParameters["id"]?.toIntOrNull() ?: run {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid sprite id"))
+            return@get
+        }
+        val source = call.request.queryParameters["source"]?.toIntOrNull()?.coerceIn(1, MAX_DIFF_REV)
+        val base = (call.request.queryParameters["base"]?.toIntOrNull() ?: 1).coerceIn(1, MAX_DIFF_REV)
+        val rev = (call.request.queryParameters["rev"]?.toIntOrNull() ?: config.revision).coerceIn(base, MAX_DIFF_REV)
+        val binRevs = diffBinaryRevisionsSet(config)
+        if (source != null) {
+            if (source !in binRevs) {
+                call.respondMissingDiffBinary(source)
+                return@get
+            }
+        } else {
+            if (base !in binRevs) {
+                call.respondMissingDiffBinary(base)
+                return@get
+            }
+            if (rev !in binRevs) {
+                call.respondMissingDiffBinary(rev)
+                return@get
+            }
+        }
+        val needed =
+            if (source != null) listOf(source) else revisionsForSpriteMergeChain(binRevs, base, rev)
+        if (!call.ensureDecodedRevisionsReady(config, needed)) return@get
+        call.respondSpriteRaw(config, id)
+    }
+
     route("/diff") {
         get("/decode/status") {
             val revsParam = call.request.queryParameters["revs"]
@@ -792,6 +885,65 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
                 return@get
             }
             call.respond(manifest)
+        }
+
+        get("/interface/manifest") {
+            val rev = (call.request.queryParameters["rev"]?.toIntOrNull() ?: config.revision).coerceIn(1, MAX_DIFF_REV)
+            val needed = if (rev <= 1) listOf(1) else listOf(1, rev)
+            if (!call.ensureDecodedRevisionsReady(config, needed)) return@get
+            call.appendNoStoreJsonHeaders()
+            call.respond(
+                mapOf(
+                    "rev" to rev,
+                    "rows" to getInterfaceManifest(config, rev),
+                )
+            )
+        }
+
+        get("/clientscripts/manifest") {
+            val rev = (call.request.queryParameters["rev"]?.toIntOrNull() ?: config.revision).coerceIn(1, MAX_DIFF_REV)
+            if (!call.ensureDecodedRevisionsReady(config, listOf(rev))) return@get
+            val decoded = DiffBinaryCache.getDecodedRev(config, rev) ?: run {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "No diff for rev $rev"))
+                return@get
+            }
+            call.appendNoStoreJsonHeaders()
+            val rows = decoded.clientScripts.entries
+                .sortedBy { it.key }
+                .map { (id, raw) -> mapOf("id" to id, "length" to raw.size) }
+            call.respond(
+                mapOf(
+                    "rev" to rev,
+                    "count" to rows.size,
+                    "rows" to rows,
+                )
+            )
+        }
+
+        get("/clientscript/{id}") {
+            val scriptId = call.parameters["id"]?.toIntOrNull() ?: run {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid clientscript id"))
+                return@get
+            }
+            val rev = (call.request.queryParameters["rev"]?.toIntOrNull() ?: config.revision).coerceIn(1, MAX_DIFF_REV)
+            if (!call.ensureDecodedRevisionsReady(config, listOf(rev))) return@get
+            val decoded = DiffBinaryCache.getDecodedRev(config, rev) ?: run {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "No diff for rev $rev"))
+                return@get
+            }
+            val raw = decoded.clientScripts[scriptId] ?: run {
+                call.respond(HttpStatusCode.NotFound, mapOf("error" to "Clientscript $scriptId not found for rev $rev"))
+                return@get
+            }
+            call.appendNoStoreJsonHeaders()
+            call.respond(
+                mapOf(
+                    "id" to scriptId,
+                    "rev" to rev,
+                    "length" to raw.size,
+                    "rawBytesBase64" to Base64.getEncoder().encodeToString(raw),
+                )
+            )
         }
 
         get("/gamevals/manifest") {
@@ -989,6 +1141,36 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
                 if (source != null) listOf(source) else revisionsForSpriteMergeChain(binRevsSprite, base, rev)
             if (!call.ensureDecodedRevisionsReady(config, needed)) return@get
             call.respondSprite(config, id)
+        }
+
+        get("/sprite/{id}/raw") {
+            val id = call.parameters["id"]?.toIntOrNull() ?: run {
+                call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid sprite id"))
+                return@get
+            }
+            val source = call.request.queryParameters["source"]?.toIntOrNull()?.coerceIn(1, MAX_DIFF_REV)
+            val base = (call.request.queryParameters["base"]?.toIntOrNull() ?: 1).coerceIn(1, MAX_DIFF_REV)
+            val rev = (call.request.queryParameters["rev"]?.toIntOrNull() ?: config.revision).coerceIn(base, MAX_DIFF_REV)
+            val binRevsSprite = diffBinaryRevisionsSet(config)
+            if (source != null) {
+                if (source !in binRevsSprite) {
+                    call.respondMissingDiffBinary(source)
+                    return@get
+                }
+            } else {
+                if (base !in binRevsSprite) {
+                    call.respondMissingDiffBinary(base)
+                    return@get
+                }
+                if (rev !in binRevsSprite) {
+                    call.respondMissingDiffBinary(rev)
+                    return@get
+                }
+            }
+            val needed =
+                if (source != null) listOf(source) else revisionsForSpriteMergeChain(binRevsSprite, base, rev)
+            if (!call.ensureDecodedRevisionsReady(config, needed)) return@get
+            call.respondSpriteRaw(config, id)
         }
 
         get("/config/{type}/content") {
@@ -1328,6 +1510,35 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
             }
         }
     }
+
+    get("/interface/{id}") {
+        val id = call.parameters["id"]?.toIntOrNull() ?: run {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid interface id"))
+            return@get
+        }
+        val rev = (call.request.queryParameters["rev"]?.toIntOrNull() ?: config.revision).coerceIn(1, MAX_DIFF_REV)
+        call.appendNoStoreJsonHeaders()
+        val binRevs = diffBinaryRevisionsSet(config)
+        if (1 !in binRevs) { call.respondMissingDiffBinary(1); return@get }
+        if (rev !in binRevs) { call.respondMissingDiffBinary(rev); return@get }
+        val needed = revisionsForAnchoredConfigDelta(binRevs, 1, rev)
+        if (!call.ensureDecodedRevisionsReady(config, needed)) return@get
+        val snapshot = withContext(Dispatchers.Default) {
+            getTypedCombinedConfig(config, ConfigDiffType.INTERFACES.fileName, rev)[id]
+        } ?: run {
+            call.respond(HttpStatusCode.NotFound, mapOf("error" to "Interface $id not found for rev $rev"))
+            return@get
+        }
+        // Expand any JSON-blob fields (e.g. components) inline so callers get a real object, not a double-encoded string.
+        val response = linkedMapOf<String, Any?>()
+        snapshot.forEach { (key, entry) ->
+            response[key] = when (val raw = entry.value) {
+                is String -> runCatching { JsonParser.parseString(raw) }.getOrElse { raw }
+                else -> fieldEntryToJson(entry)
+            }
+        }
+        call.respondText(json.toJson(response), ContentType.Application.Json)
+    }
 }
 
 private fun getDeltaSprites(config: ServerConfig, base: Int, rev: Int): SpriteDelta {
@@ -1409,6 +1620,65 @@ private suspend fun ApplicationCall.respondSprite(config: ServerConfig, id: Int)
     respondBytes(pngBytes, ContentType.Image.PNG)
 }
 
+private suspend fun ApplicationCall.respondSpriteRaw(config: ServerConfig, id: Int) {
+    val base = (request.queryParameters["base"]?.toIntOrNull() ?: 1).coerceIn(1, MAX_DIFF_REV)
+    val rev = (request.queryParameters["rev"]?.toIntOrNull() ?: config.revision).coerceIn(base, MAX_DIFF_REV)
+    val sourceRev = request.queryParameters["source"]?.toIntOrNull()?.coerceIn(1, MAX_DIFF_REV)
+
+    val source = sourceRev ?: resolveSpriteSourceRevById(config, base, rev, setOf(id))[id] ?: rev
+
+    // Prefer binary metadata (SMRP trailer) — avoids live cache filesystem access.
+    val binaryMetas = DiffBinaryCache.getDecodedRev(config, source)?.spriteMetadata?.get(id)
+    val sprites: List<Map<String, Any?>>
+    if (binaryMetas != null && binaryMetas.isNotEmpty() && binaryMetas.all { it.rasterBase64.isNotEmpty() }) {
+        sprites = binaryMetas.map { meta ->
+            mapOf(
+                "offsetX" to meta.offsetX,
+                "offsetY" to meta.offsetY,
+                "width" to meta.width,
+                "height" to meta.height,
+                "averageColor" to meta.averageColor,
+                "subHeight" to meta.subHeight,
+                "subWidth" to meta.subWidth,
+                "alphaBase64" to meta.alphaBase64,
+                "rasterBase64" to meta.rasterBase64,
+                "palette" to meta.palette,
+            )
+        }
+    } else {
+        // Fall back to loading directly from live cache filesystem.
+        val type = loadSpriteTypesForRevision(config, source)?.get(id) ?: run {
+            respond(HttpStatusCode.NotFound, mapOf("error" to "Sprite $id not found for source rev $source"))
+            return
+        }
+        sprites = type.sprites.map { sprite ->
+            mapOf(
+                "offsetX" to sprite.offsetX,
+                "offsetY" to sprite.offsetY,
+                "width" to sprite.width,
+                "height" to sprite.height,
+                "averageColor" to sprite.averageColor,
+                "subHeight" to sprite.subHeight,
+                "subWidth" to sprite.subWidth,
+                "alphaBase64" to sprite.alpha?.let { Base64.getEncoder().encodeToString(it) },
+                "rasterBase64" to Base64.getEncoder().encodeToString(sprite.raster),
+                "palette" to sprite.palette.toList(),
+            )
+        }
+    }
+
+    appendNoStoreJsonHeaders()
+    respond(
+        mapOf(
+            "id" to id,
+            "base" to base,
+            "rev" to rev,
+            "source" to source,
+            "sprites" to sprites,
+        )
+    )
+}
+
 internal fun getCombinedSprites(config: ServerConfig, base: Int, rev: Int): Pair<List<Int>, Map<Int, Int>> {
     val key = gameEnvBaseRevKey(config, base, rev)
     DiffRouteCaches.combinedSprites.get(key)?.let { return it }
@@ -1429,7 +1699,11 @@ internal fun getCombinedSprites(config: ServerConfig, base: Int, rev: Int): Pair
     }
 }
 
-private data class CombinedSpriteEntry(val bytes: ByteArray, val contentSha256: ByteArray?)
+private data class CombinedSpriteEntry(
+    val bytes: ByteArray,
+    val contentSha256: ByteArray?,
+    val metadata: List<CacheBinaryFormat.IndexedSpriteMeta>,
+)
 
 /** PNG bytes plus optional SHA-256 from v7 `.bin` (used to skip ImageIO for unchanged-looking sprites). */
 private fun getCombinedSpriteData(config: ServerConfig, base: Int, rev: Int): Map<Int, CombinedSpriteEntry> {
@@ -1438,7 +1712,11 @@ private fun getCombinedSpriteData(config: ServerConfig, base: Int, rev: Int): Ma
     val baseDecoded = DiffBinaryCache.getDecodedRev(config, clampedBase)
     val merged = LinkedHashMap<Int, CombinedSpriteEntry>(baseDecoded?.sprites?.size ?: 0)
     baseDecoded?.sprites?.forEach { (id, bytes) ->
-        merged[id] = CombinedSpriteEntry(bytes, baseDecoded.spriteSha256[id])
+        merged[id] = CombinedSpriteEntry(
+            bytes = bytes,
+            contentSha256 = baseDecoded.spriteSha256[id],
+            metadata = baseDecoded.spriteMetadata[id] ?: emptyList(),
+        )
     }
     if (clampedRev <= clampedBase) return merged
 
@@ -1448,12 +1726,20 @@ private fun getCombinedSpriteData(config: ServerConfig, base: Int, rev: Int): Ma
         summary.removed.forEach { id -> merged.remove(id) }
         summary.added.forEach { id ->
             decoded.sprites[id]?.let { bytes ->
-                merged[id] = CombinedSpriteEntry(bytes, decoded.spriteSha256[id])
+                merged[id] = CombinedSpriteEntry(
+                    bytes = bytes,
+                    contentSha256 = decoded.spriteSha256[id],
+                    metadata = decoded.spriteMetadata[id] ?: emptyList(),
+                )
             }
         }
         summary.changed.forEach { id ->
             decoded.sprites[id]?.let { bytes ->
-                merged[id] = CombinedSpriteEntry(bytes, decoded.spriteSha256[id])
+                merged[id] = CombinedSpriteEntry(
+                    bytes = bytes,
+                    contentSha256 = decoded.spriteSha256[id],
+                    metadata = decoded.spriteMetadata[id] ?: emptyList(),
+                )
             }
         }
     }

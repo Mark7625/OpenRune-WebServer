@@ -34,6 +34,11 @@ object CacheBinaryFormat {
 
     private const val MAGIC = "ORCA"
     private const val SPRITE_SHA_LEN = 32
+    private const val TRAILER_SPRITE_META = "SMET"
+    private const val TRAILER_SPRITE_RASTER = "SMRP"
+    private const val TRAILER_OPENRS2_ID = "OCID"
+    private const val TRAILER_INTERFACE_MANIFEST = "IFMF"
+    private const val TRAILER_CLIENT_SCRIPTS = "CSRB"
 
     private val gson = Gson()
 
@@ -41,6 +46,19 @@ object CacheBinaryFormat {
         val searchable: String,
         val text: String,
         val sub: Map<Int, String> = emptyMap(),
+    )
+
+    data class IndexedSpriteMeta(
+        val offsetX: Int = 0,
+        val offsetY: Int = 0,
+        val width: Int = 0,
+        val height: Int = 0,
+        val averageColor: Int = -1,
+        val subHeight: Int = 0,
+        val subWidth: Int = 0,
+        val alphaBase64: String? = null,
+        val rasterBase64: String = "",
+        val palette: List<Int> = emptyList(),
     )
 
     data class DecodedRev(
@@ -51,9 +69,12 @@ object CacheBinaryFormat {
         val gameval: Map<String, Map<Int, GamevalExtra>> = emptyMap(),
         val sprites: Map<Int, ByteArray> = emptyMap(),
         val spriteSha256: Map<Int, ByteArray> = emptyMap(),
+        val spriteMetadata: Map<Int, List<IndexedSpriteMeta>> = emptyMap(),
         val mapObjects: Map<Int, List<LocationCustom>> = emptyMap(),
         val mapRegions: Map<Int, RegionData> = emptyMap(),
         val xteasByRegion: Map<Int, IntArray> = emptyMap(),
+        val interfaceManifest: List<InterfaceManifestEntry> = emptyList(),
+        val clientScripts: Map<Int, ByteArray> = emptyMap(),
     )
 
     fun encode(
@@ -63,9 +84,12 @@ object CacheBinaryFormat {
         configs: Map<String, Map<Int, DefinitionSnapshot>>,
         gameval: Map<String, Map<Int, GamevalExtra>> = emptyMap(),
         sprites: Map<Int, ByteArray> = emptyMap(),
+        spriteMetadata: Map<Int, List<IndexedSpriteMeta>> = emptyMap(),
         mapObjects: Map<Int, List<LocationCustom>> = emptyMap(),
         mapRegions: Map<Int, RegionData> = emptyMap(),
         xteasByRegion: Map<Int, IntArray> = emptyMap(),
+        interfaceManifest: List<InterfaceManifestEntry> = emptyList(),
+        clientScripts: Map<Int, ByteArray> = emptyMap(),
     ): ByteArray {
         val body = ByteArrayOutputStream()
         val configTypes = ConfigDiffType.diffTypeNames
@@ -175,9 +199,72 @@ object CacheBinaryFormat {
             repeat(4) { writeInt32LE(body, norm[it]) }
         }
 
-        // Optional source OpenRS2 cache id trailer for boot-time freshness checks.
+        // Optional trailers (marker-prefixed for backward compatibility).
+        body.write(TRAILER_SPRITE_META.toByteArray(Charsets.UTF_8))
+        writeVarint(body, spriteMetadata.size)
+        spriteMetadata.entries.sortedBy { it.key }.forEach { (id, metas) ->
+            writeVarint(body, id)
+            writeVarint(body, metas.size)
+            metas.forEach { meta ->
+                writeSVarint(body, meta.offsetX)
+                writeSVarint(body, meta.offsetY)
+                writeVarint(body, meta.width)
+                writeVarint(body, meta.height)
+                writeSVarint(body, meta.averageColor)
+                writeVarint(body, meta.subHeight)
+                writeVarint(body, meta.subWidth)
+                val alpha = meta.alphaBase64
+                if (alpha == null) {
+                    body.write(0)
+                } else {
+                    body.write(1)
+                    writeString(body, alpha)
+                }
+            }
+        }
+
+        // SMRP: raster + palette data (only entries that have raster populated)
+        val spriteMetaWithRaster = spriteMetadata.filterValues { metas -> metas.any { it.rasterBase64.isNotEmpty() } }
+        if (spriteMetaWithRaster.isNotEmpty()) {
+            body.write(TRAILER_SPRITE_RASTER.toByteArray(Charsets.UTF_8))
+            writeVarint(body, spriteMetaWithRaster.size)
+            spriteMetaWithRaster.entries.sortedBy { it.key }.forEach { (id, metas) ->
+                writeVarint(body, id)
+                writeVarint(body, metas.size)
+                metas.forEach { meta ->
+                    writeString(body, meta.rasterBase64)
+                    writeVarint(body, meta.palette.size)
+                    meta.palette.forEach { writeInt32LE(body, it) }
+                }
+            }
+        }
+
         if (openRs2CacheId != null) {
+            body.write(TRAILER_OPENRS2_ID.toByteArray(Charsets.UTF_8))
             writeInt64LE(body, openRs2CacheId)
+        }
+
+        body.write(TRAILER_INTERFACE_MANIFEST.toByteArray(Charsets.UTF_8))
+        writeVarint(body, interfaceManifest.size)
+        interfaceManifest.sortedBy { it.interfaceId }.forEach { entry ->
+            writeVarint(body, entry.interfaceId)
+            body.write(if (entry.gameval != null) 1 else 0)
+            if (entry.gameval != null) writeString(body, entry.gameval)
+            body.write(
+                when (entry.iflegacy) {
+                    true -> 1
+                    false -> 0
+                    null -> 2
+                }
+            )
+        }
+
+        body.write(TRAILER_CLIENT_SCRIPTS.toByteArray(Charsets.UTF_8))
+        writeVarint(body, clientScripts.size)
+        clientScripts.entries.sortedBy { it.key }.forEach { (scriptId, raw) ->
+            writeVarint(body, scriptId)
+            writeVarint(body, raw.size)
+            body.write(raw)
         }
 
         val bodyBytes = body.toByteArray()
@@ -309,7 +396,129 @@ object CacheBinaryFormat {
             xteasByRegion[sq] = IntArray(4) { readInt32LE(input) }
         }
 
-        val openRs2CacheId = if (input.available() >= 8) readInt64LE(input) else null
+        val spriteMetadata = HashMap<Int, List<IndexedSpriteMeta>>()
+        val interfaceManifest = ArrayList<InterfaceManifestEntry>()
+        val clientScripts = HashMap<Int, ByteArray>()
+        var openRs2CacheId: Long? = null
+        if (input.available() > 0) {
+            val trailer = readBytes(input, input.available())
+            val trailerInput = ByteArrayInputStream(trailer)
+            var parsedWithMarkers = false
+
+            while (trailerInput.available() >= 4) {
+                val marker = String(readBytes(trailerInput, 4), Charsets.UTF_8)
+                when (marker) {
+                    TRAILER_SPRITE_META -> {
+                        parsedWithMarkers = true
+                        val idCount = readVarint(trailerInput)
+                        repeat(idCount) {
+                            val id = readVarint(trailerInput)
+                            val count = readVarint(trailerInput)
+                            val metas = ArrayList<IndexedSpriteMeta>(count)
+                            repeat(count) {
+                                val offsetX = readSVarint(trailerInput)
+                                val offsetY = readSVarint(trailerInput)
+                                val width = readVarint(trailerInput)
+                                val height = readVarint(trailerInput)
+                                val averageColor = readSVarint(trailerInput)
+                                val subHeight = readVarint(trailerInput)
+                                val subWidth = readVarint(trailerInput)
+                                val hasAlpha = trailerInput.read() == 1
+                                val alphaBase64 = if (hasAlpha) readString(trailerInput) else null
+                                metas.add(
+                                    IndexedSpriteMeta(
+                                        offsetX = offsetX,
+                                        offsetY = offsetY,
+                                        width = width,
+                                        height = height,
+                                        averageColor = averageColor,
+                                        subHeight = subHeight,
+                                        subWidth = subWidth,
+                                        alphaBase64 = alphaBase64,
+                                    )
+                                )
+                            }
+                            spriteMetadata[id] = metas
+                        }
+                    }
+                    TRAILER_SPRITE_RASTER -> {
+                        parsedWithMarkers = true
+                        val idCount = readVarint(trailerInput)
+                        repeat(idCount) {
+                            val id = readVarint(trailerInput)
+                            val count = readVarint(trailerInput)
+                            val existingMetas = spriteMetadata[id]?.toMutableList()
+                            if (existingMetas == null) {
+                                // No SMET entry — skip raster data
+                                repeat(count) {
+                                    readString(trailerInput)
+                                    val palSize = readVarint(trailerInput)
+                                    repeat(palSize) { readInt32LE(trailerInput) }
+                                }
+                                return@repeat
+                            }
+                            val updated = ArrayList<IndexedSpriteMeta>(count)
+                            repeat(count) { idx ->
+                                val rasterBase64 = readString(trailerInput)
+                                val palSize = readVarint(trailerInput)
+                                val palette = List(palSize) { readInt32LE(trailerInput) }
+                                val base = existingMetas.getOrNull(idx) ?: IndexedSpriteMeta()
+                                updated.add(base.copy(rasterBase64 = rasterBase64, palette = palette))
+                            }
+                            spriteMetadata[id] = updated
+                        }
+                    }
+                    TRAILER_OPENRS2_ID -> {
+                        parsedWithMarkers = true
+                        if (trailerInput.available() >= 8) {
+                            openRs2CacheId = readInt64LE(trailerInput)
+                        }
+                    }
+                    TRAILER_INTERFACE_MANIFEST -> {
+                        parsedWithMarkers = true
+                        val count = readVarint(trailerInput)
+                        repeat(count) {
+                            val interfaceId = readVarint(trailerInput)
+                            val hasGameval = trailerInput.read() == 1
+                            val gameval = if (hasGameval) readString(trailerInput) else null
+                            val legacyFlag = trailerInput.read()
+                            val iflegacy = when (legacyFlag) {
+                                1 -> true
+                                0 -> false
+                                else -> null
+                            }
+                            interfaceManifest.add(
+                                InterfaceManifestEntry(
+                                    interfaceId = interfaceId,
+                                    gameval = gameval,
+                                    iflegacy = iflegacy,
+                                )
+                            )
+                        }
+                    }
+                    TRAILER_CLIENT_SCRIPTS -> {
+                        parsedWithMarkers = true
+                        val count = readVarint(trailerInput)
+                        repeat(count) {
+                            val scriptId = readVarint(trailerInput)
+                            val len = readVarint(trailerInput)
+                            clientScripts[scriptId] = readBytes(trailerInput, len)
+                        }
+                    }
+                    else -> {
+                        // Backward compatibility: old binaries had an optional raw 8-byte OpenRS2 id trailer.
+                        if (!parsedWithMarkers && trailer.size >= 8) {
+                            openRs2CacheId = readInt64LE(ByteArrayInputStream(trailer.copyOfRange(0, 8)))
+                        }
+                        break
+                    }
+                }
+            }
+
+            if (!parsedWithMarkers && openRs2CacheId == null && trailer.size >= 8) {
+                openRs2CacheId = readInt64LE(ByteArrayInputStream(trailer.copyOfRange(0, 8)))
+            }
+        }
 
         return DecodedRev(
             revision = revision,
@@ -319,9 +528,12 @@ object CacheBinaryFormat {
             gameval = gameval,
             sprites = sprites,
             spriteSha256 = spriteSha256,
+            spriteMetadata = spriteMetadata,
             mapObjects = mapObjects,
             mapRegions = mapRegions,
             xteasByRegion = xteasByRegion,
+            interfaceManifest = interfaceManifest,
+            clientScripts = clientScripts,
         )
     }
 
@@ -333,13 +545,29 @@ object CacheBinaryFormat {
         configs: Map<String, Map<Int, DefinitionSnapshot>>,
         gameval: Map<String, Map<Int, GamevalExtra>> = emptyMap(),
         sprites: Map<Int, ByteArray> = emptyMap(),
+        spriteMetadata: Map<Int, List<IndexedSpriteMeta>> = emptyMap(),
         mapObjects: Map<Int, List<LocationCustom>> = emptyMap(),
         mapRegions: Map<Int, RegionData> = emptyMap(),
         xteasByRegion: Map<Int, IntArray> = emptyMap(),
+        interfaceManifest: List<InterfaceManifestEntry> = emptyList(),
+        clientScripts: Map<Int, ByteArray> = emptyMap(),
     ) {
         file.parentFile?.mkdirs()
         file.writeBytes(
-            encode(revision, openRs2CacheId, manifest, configs, gameval, sprites, mapObjects, mapRegions, xteasByRegion)
+            encode(
+                revision,
+                openRs2CacheId,
+                manifest,
+                configs,
+                gameval,
+                sprites,
+                spriteMetadata,
+                mapObjects,
+                mapRegions,
+                xteasByRegion,
+                interfaceManifest,
+                clientScripts,
+            )
         )
     }
 

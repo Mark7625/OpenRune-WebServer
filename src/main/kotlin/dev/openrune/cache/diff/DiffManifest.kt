@@ -21,3 +21,9 @@ data class ConfigDiffSummary(
     val isEmpty: Boolean
         get() = added.isEmpty() && removed.isEmpty() && changed.isEmpty()
 }
+
+data class InterfaceManifestEntry(
+    val interfaceId: Int,
+    val gameval: String?,
+    val iflegacy: Boolean?,
+)
