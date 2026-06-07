@@ -1,31 +1,24 @@
 package dev.openrune.cache
 
-import dev.openrune.OsrsCacheProvider
 import dev.openrune.ServerConfig
-import dev.openrune.cache.extractor.BaseExtractor
-import dev.openrune.cache.extractor.osrs.MapExtractor
-import dev.openrune.cache.osrs.OsrsCacheIndex
+import dev.openrune.cache.diff.CacheBinaryFormat
+import dev.openrune.cache.diff.DiffDumper
+import dev.openrune.cache.diff.DiffBinaryCache
 import dev.openrune.cache.tools.CacheInfo
 import dev.openrune.cache.tools.OpenRS2
-import dev.openrune.filesystem.Cache
-import dev.openrune.util.json
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import mu.KotlinLogging
-import java.io.File
+import java.time.Instant
 
 class WebCacheManager(
-    private val config: ServerConfig,
-    private val zipService: dev.openrune.server.zip.ZipService? = null
+    private val config: ServerConfig
 ) {
     private val logger = KotlinLogging.logger {}
-    private val manifestManager = ChecksumManifestManager(config)
-    private val downloader = CacheDownloader()
-    private val extractorManager = FileExtractorManager(
-        config = config,
-        testingMode = TESTING_MODE,
-        verifiedIndices = VERIFIED_INDICES
+    private data class DiffOpenRs2Stamp(
+        val revision: Int,
+        val cacheId: Long?,
+        val openRs2Timestamp: Long?
     )
 
     companion object {
@@ -163,260 +156,154 @@ class WebCacheManager(
         }
     }
 
+    private data class TargetResolution(
+        val revision: Int,
+        val expectedStamp: DiffOpenRs2Stamp?
+    )
+
+    private data class WarmupStep(
+        val rev: Int,
+        val label: String
+    )
 
     /**
-     * Process changed files and extract them using the appropriate extractors
+     * Ensures a target revision has an up-to-date diff binary and then warms decoded binaries into memory.
+     * The revision is resolved from [targetCacheId] (defaults to [ServerConfig.cacheID]) via OpenRS2.
      */
-    private suspend fun updateFiles(
-        cache: Cache,
-        changedFiles: List<FileChecksum>,
-        baseProgress: Double = 0.0,
-        progressRange: Double = 100.0,
-        onProgress: ((Boolean, Double?, String?) -> Unit)? = null
+    suspend fun loadOrUpdate(
+        targetCacheId: Int? = config.cacheID,
+        onUpdatingDetected: ((Boolean, Double?, String?) -> Unit)? = null
     ) = withContext(Dispatchers.IO) {
-        if (changedFiles.isEmpty()) {
-            logger.debug("No files to extract")
-            return@withContext
+        fun emitUpdating(active: Boolean, progress: Double?, message: String?) {
+            println("[onUpdatingDetected] active=$active progress=$progress message=${message ?: ""}")
+            onUpdatingDetected?.invoke(active, progress, message)
         }
 
-        CacheManager.init(OsrsCacheProvider(cache, config.revision))
+        emitUpdating(true, 0.0, "Checking OpenRS2 cache index")
+        ensureOpenRs2CachesLoaded()
 
+        val target = resolveTarget(targetCacheId)
+        config.revision = target.revision
+        val stamp = target.expectedStamp
+        val cacheIdForDump = stamp?.cacheId?.takeIf { it > 0L }?.toInt()
+            ?: error("Resolved stamp has no valid cacheId for cacheID=$targetCacheId")
+        val targetDesc = "rev ${target.revision}, OpenRS2 id $cacheIdForDump"
+        emitUpdating(true, 5.0, "Target diff: $targetDesc")
 
-        val indicesNeedingExtractors = changedFiles.map { it.index }.distinct()
-        val extractorCache = extractorManager.createExtractors(indicesNeedingExtractors, cache)
-        
-        val filesWithExtractors = changedFiles.filter { extractorCache.containsKey(it.index) }
-        if (filesWithExtractors.isEmpty()) {
-            logger.debug("No files with extractors to process")
-            return@withContext
-        }
-
-        val filesToProcess = extractorManager.filterFilesForTesting(filesWithExtractors)
-        val sortedFiles = extractorManager.sortFiles(filesToProcess)
-
-        logger.info("Extracting ${sortedFiles.size} changed files (sorted by dependency order)...")
-
-        val totalFiles = filesWithExtractors.size
-        var processedFiles = 0
-
-        extractorManager.initializeProgressBars(extractorCache, sortedFiles)
-
-        // Allocate progress: 90% for file extraction, 10% for map extraction
-        val fileProgressRange = progressRange * 0.9
-        val mapProgressRange = progressRange * 0.1
-
-        if (TESTING_MODE && sortedFiles.size < totalFiles) {
-            val skippedCount = totalFiles - sortedFiles.size
-            processedFiles = skippedCount
-            updateProgress(baseProgress, fileProgressRange, totalFiles, processedFiles, onProgress)
-        }
-
-        processFiles(sortedFiles, extractorCache, cache, baseProgress, fileProgressRange, totalFiles, onProgress) { 
-            processedFiles = it 
-        }
-
-
-        // Extract maps with progress reporting
-        if (!(VERIFIED_INDICES.contains(MAPS) && TESTING_MODE)) {
-            val mapExtractor = MapExtractor(config, cache)
-            val mapBaseProgress = baseProgress + fileProgressRange // Maps start after files complete
-            mapExtractor.extract(0, 0, 0, byteArrayOf(0)) { _, mapProgress, message ->
-                if (mapProgress != null) {
-                    // Calculate overall progress: baseProgress + fileProgressRange + mapProgress
-                    val overallProgress = mapBaseProgress + (mapProgress / 100.0) * mapProgressRange
-                    onProgress?.invoke(true, overallProgress, message ?: "Extracting maps")
-                } else {
-                    onProgress?.invoke(true, mapBaseProgress, message ?: "Extracting maps")
-                }
-            }
-        }
-
-
-        val totalManifestFiles = extractorManager.countManifestFiles(extractorCache)
-        val manifestProgressBar = extractorManager.createManifestProgressBar(totalManifestFiles)
-        extractorManager.setSharedManifestProgressBar(extractorCache, manifestProgressBar)
-
-        extractorManager.closeExtractors(extractorCache, manifestProgressBar)
-        extractorManager.clearExtractorData(extractorCache)
-
-
-
-        logger.info("Finished extracting ${changedFiles.size} files")
-    }
-    
-    private fun updateProgress(
-        baseProgress: Double,
-        progressRange: Double,
-        totalFiles: Int,
-        processedFiles: Int,
-        onProgress: ((Boolean, Double?, String?) -> Unit)?
-    ) {
-        val progress = baseProgress + (processedFiles.toDouble() / totalFiles) * progressRange
-        onProgress?.invoke(true, progress, "Unpacking Cache")
-    }
-    
-    private suspend fun processFiles(
-        sortedFiles: List<FileChecksum>,
-        extractorCache: Map<Int, BaseExtractor>,
-        cache: Cache,
-        baseProgress: Double,
-        progressRange: Double,
-        totalFiles: Int,
-        onProgress: ((Boolean, Double?, String?) -> Unit)?,
-        processedFilesRef: (Int) -> Unit
-    ) {
-        var processed = 0
-        sortedFiles.forEach { fileChecksum ->
-            val extractor = extractorCache[fileChecksum.index] ?: return@forEach
-
-            try {
-                val fileData = if (fileChecksum.index == MAPS ) byteArrayOf(0) else cache.data(fileChecksum.index, fileChecksum.archive, fileChecksum.file)
-                if (fileData != null) {
-                    extractor.extract(
-                        fileChecksum.index,
-                        fileChecksum.archive,
-                        fileChecksum.file,
-                        fileData
-                    )
-                } else {
-                    logger.warn("Failed to load data for index=${fileChecksum.index}, archive=${fileChecksum.archive}, file=${fileChecksum.file}")
-                }
-            } catch (e: Exception) {
-                logger.error("Error extracting file: index=${fileChecksum.index}, archive=${fileChecksum.archive}, file=${fileChecksum.file}", e)
-            }
-
-            processed++
-            processedFilesRef(processed)
-            updateProgress(baseProgress, progressRange, totalFiles, processed, onProgress)
-        }
-    }
-
-
-    private fun getCachePath(): File {
-        return CachePathHelper.getCacheDirectory(
-            config.gameType,
-            config.environment,
-            config.revision
-        )
-    }
-
-    private suspend fun checkAndUpdateCacheInfo(onUpdatingDetected: ((Boolean, Double?, String?) -> Unit)? = null) = withContext(Dispatchers.IO) {
-        val latestCache = OpenRS2.findRevision(
-            rev = config.revision,
-            game = config.gameType,
-            environment = config.environment
-        )
-
-        val cacheDir = getCachePath()
-        cacheDir.mkdirs()
-        
-        val cacheInfoFile = CachePathHelper.getCacheFile(
-            config.gameType,
-            config.environment,
-            config.revision,
-            CACHE_INFO_FILE
-        )
-
-        if (needsUpdate(latestCache, cacheInfoFile, cacheDir)) {
-            onUpdatingDetected?.invoke(true, 0.0, "Updating Server Cache")
-            downloader.downloadCache(latestCache, cacheDir, onUpdatingDetected)
-            onUpdatingDetected?.invoke(true, 50.0, "Verifying Cache checksum")
-            downloader.unzipCache(cacheDir, onUpdatingDetected)
-
-            val dataDir = File(cacheDir, DATA_DIR)
-            val checksumFile = File(cacheDir, DATA_CHECKSUM_FILE)
-            ChecksumManager.saveDirectoryChecksum(dataDir, checksumFile)
-
-            cacheInfoFile.writeText(json.toJson(latestCache))
-            logger.info("Cache downloaded, extracted, verified, and $CACHE_INFO_FILE saved")
+        if (needsDiffUpdate(target.revision, target.expectedStamp)) {
+            emitUpdating(true, 10.0, "Diff outdated or missing for $targetDesc, updating")
+            runDiffDumper(target.revision, cacheIdForDump, ::emitUpdating)
         } else {
-            logger.info("Cache is up to date, skipping download")
+            emitUpdating(true, 25.0, "Diff binary is up to date for rev ${target.revision}")
+        }
+
+        emitUpdating(true, 30.0, "Loading diff index")
+
+        val availableRevs = DiffBinaryCache.listRevisionsWithBinary(config)
+        if (availableRevs.isEmpty()) {
+            emitUpdating(true, 100.0, "No diff binaries found")
+            emitUpdating(false, null, null)
+            return@withContext
+        }
+
+        val ordered = buildList {
+            if (1 in availableRevs) add(WarmupStep(1, "base"))
+            if (config.revision in availableRevs && config.revision != 1) add(WarmupStep(config.revision, "server"))
+            availableRevs
+                .filterNot { it == 1 || it == config.revision }
+                .sorted()
+                .forEach { add(WarmupStep(it, "rev")) }
+        }
+
+        val total = ordered.size.coerceAtLeast(1)
+        ordered.forEachIndexed { index, step ->
+            val pct = 30.0 + ((index * 70.0) / total.toDouble())
+            emitUpdating(
+                true,
+                pct,
+                "Decoding diff (${index + 1}/$total): ${step.label} ${step.rev}"
+            )
+            DiffBinaryCache.getDecodedRev(config, step.rev)
+        }
+
+        emitUpdating(true, 100.0, "Diff decode warmup complete")
+        emitUpdating(false, null, null)
+    }
+
+    private fun ensureOpenRs2CachesLoaded() {
+        if (OpenRS2.allCaches.isEmpty()) {
+            OpenRS2.loadCaches()
         }
     }
 
-    private fun needsUpdate(latestCache: CacheInfo, cacheInfoFile: File, cacheDir: File): Boolean {
-        if (!cacheInfoFile.exists()) {
-            return true
-        }
-
-        try {
-            val existingCacheInfoJson = cacheInfoFile.readText()
-            val existingCacheInfo = json.fromJson(existingCacheInfoJson, CacheInfo::class.java)
-
-            if (existingCacheInfo.id != latestCache.id) {
-                return true
-            }
-
-            val dataDir = File(cacheDir, DATA_DIR)
-            if (!dataDir.exists() || !dataDir.isDirectory) {
-                logger.info("Data directory missing, needs extraction")
-                return true
-            }
-
-            val checksumFile = File(cacheDir, DATA_CHECKSUM_FILE)
-            if (!ChecksumManager.verifyDirectoryIntegrity(dataDir, checksumFile)) {
-                return true
-            }
-
-        } catch (e: Exception) {
-            logger.warn("Failed to read existing cache-info.json: ${e.message}")
-            return true
-        }
-
-        return false
-    }
-
-    /**
-     * Calculate checksums for all map landscape files
-     * @param cache The cache to calculate checksums from
-     * @return Map of regionId to checksum
-     */
-    private fun calculateMapChecksums(cache: Cache): Map<Int, Long> {
-        val checksums = mutableMapOf<Int, Long>()
-        
-        logger.info("Calculating map checksums...")
-        for (x in 0..256) {
-            for (y in 0..256) {
-                val regionId = (x shl 8) or y
-                
-                // Get landscape file data using the pattern l${x}_${y}
-                val landscapeData = cache.data(OsrsCacheIndex.MAPS.id, "l${x}_${y}", null)
-                if (landscapeData != null) {
-                    val checksum = ChecksumManager.calculateCRC32(landscapeData)
-                    checksums[regionId] = checksum
+    private suspend fun runDiffDumper(
+        rev: Int,
+        openRs2CacheId: Int,
+        onUpdatingDetected: (Boolean, Double?, String?) -> Unit
+    ) {
+        var phaseProgress = 10.0
+        val dumper = DiffDumper(
+            gameType = config.gameType,
+            environment = config.environment,
+            onProgress = { msg ->
+                val pct = Regex("(\\d{1,3})%").find(msg)?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 100)
+                phaseProgress = if (pct != null) {
+                    10.0 + (pct * 0.2) // 10..30 while dumping
+                } else {
+                    (phaseProgress + 1.0).coerceAtMost(29.0)
                 }
+                onUpdatingDetected(true, phaseProgress, "Diff update: $msg")
             }
-        }
-        
-        logger.info("Calculated checksums for ${checksums.size} map regions")
-        return checksums
+        )
+        dumper.run(rev, openRs2CacheId)
+        onUpdatingDetected(true, 30.0, "Diff update complete for rev $rev")
     }
 
-    /**
-     * Find changed map regions by comparing old and new checksums
-     * @param oldChecksums Old checksums map (regionId -> checksum)
-     * @param newChecksums New checksums map (regionId -> checksum)
-     * @return Set of region IDs that have changed
-     */
-    private fun findChangedMapRegions(oldChecksums: Map<Int, Long>, newChecksums: Map<Int, Long>): Set<Int> {
-        val changedRegions = mutableSetOf<Int>()
-        
-        // Check for changed checksums in existing regions
-        oldChecksums.forEach { (regionId, oldChecksum) ->
-            val newChecksum = newChecksums[regionId]
-            if (newChecksum != null && oldChecksum != newChecksum) {
-                changedRegions.add(regionId)
+    private fun needsDiffUpdate(rev: Int, expectedStamp: DiffOpenRs2Stamp?): Boolean {
+        val diffFile = CachePathHelper.getDiffBinaryFile(config.gameType, config.environment, rev)
+        if (!diffFile.exists()) return true
+        val expectedId = expectedStamp?.cacheId?.takeIf { it > 0L } ?: return true
+        val decoded = CacheBinaryFormat.readFromFile(diffFile) ?: return true
+        val actualId = decoded.openRs2CacheId?.takeIf { it > 0L } ?: return true
+        return actualId != expectedId
+    }
+
+    private fun resolveTarget(targetCacheId: Int?): TargetResolution {
+        val effectiveCacheId = targetCacheId?.takeIf { it > 0 }
+        if (effectiveCacheId != null) {
+            val byId = stampFromCacheId(effectiveCacheId)
+            if (byId != null) {
+                val clampedRev = byId.revision.coerceIn(1, 10_000)
+                return TargetResolution(clampedRev, byId)
             }
+            logger.warn("Could not resolve OpenRS2 cache id $effectiveCacheId")
         }
-        
-        // Check for new regions (regions that exist in new but not in old)
-        newChecksums.forEach { (regionId, _) ->
-            if (!oldChecksums.containsKey(regionId)) {
-                changedRegions.add(regionId)
-            }
+        error("cacheID must be set and resolvable via OpenRS2 (got cacheID=$targetCacheId)")
+    }
+
+    private fun stampFromCacheId(cacheId: Int): DiffOpenRs2Stamp? {
+        val game = config.gameType.name.lowercase()
+        val env = config.environment.toString().lowercase()
+        val cacheInfo = OpenRS2.allCaches.firstOrNull {
+            it.id == cacheId &&
+                it.game.contains(game) &&
+                it.environment.equals(env, true)
+        } ?: return null
+        return toStamp(cacheInfo)
+    }
+
+    private fun toStamp(info: CacheInfo): DiffOpenRs2Stamp? {
+        val major = info.builds.firstOrNull()?.major ?: return null
+        val ts = try {
+            if (info.timestamp.isBlank()) null else Instant.parse(info.timestamp).toEpochMilli()
+        } catch (_: Exception) {
+            null
         }
-        
-        return changedRegions
+        return DiffOpenRs2Stamp(
+            revision = major,
+            cacheId = info.id.toLong(),
+            openRs2Timestamp = ts
+        )
     }
 
 }

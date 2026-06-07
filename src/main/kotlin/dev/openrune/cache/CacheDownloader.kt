@@ -25,38 +25,12 @@ class CacheDownloader {
     
     companion object {
         private const val DISK_ZIP = "disk.zip"
-        private const val XTEAS_JSON = "xteas.json"
         private const val DATA_DIR = "data"
         private const val PROGRESS_UPDATE_THRESHOLD = 1.0
-        private const val DOWNLOAD_PROGRESS_RANGE = 40.0
-        private const val XTEAS_PROGRESS_RANGE = 5.0
         private const val EXTRACT_PROGRESS_RANGE = 49.0
         private const val EXTRACT_BASE_PROGRESS = 50.0
-        private const val DOWNLOAD_BASE_PROGRESS = 5.0
-        private const val XTEAS_BASE_PROGRESS = 45.0
     }
-    
-    /**
-     * Download cache files (disk.zip and xteas.json)
-     */
-    suspend fun downloadCache(
-        cacheInfo: CacheInfo,
-        directory: File,
-        onProgress: ((Boolean, Double?, String?) -> Unit)?
-    ) = withContext(Dispatchers.IO) {
-        onProgress?.invoke(true, DOWNLOAD_BASE_PROGRESS, "Updating Server Cache - Downloading $DISK_ZIP")
-        downloadFile(cacheInfo.id, directory, DISK_ZIP) { current, max ->
-            val progress = DOWNLOAD_BASE_PROGRESS + (current.toDouble() / max.toDouble()) * DOWNLOAD_PROGRESS_RANGE
-            onProgress?.invoke(true, progress, "Updating Server Cache - Downloading $DISK_ZIP")
-        }
-        
-        onProgress?.invoke(true, XTEAS_BASE_PROGRESS, "Updating Server Cache - Downloading $XTEAS_JSON")
-        downloadFile(cacheInfo.id, directory, XTEAS_JSON) { current, max ->
-            val progress = XTEAS_BASE_PROGRESS + (current.toDouble() / max.toDouble()) * XTEAS_PROGRESS_RANGE
-            onProgress?.invoke(true, progress, "Updating Server Cache - Downloading $XTEAS_JSON")
-        }
-    }
-    
+
     /**
      * Extract disk.zip to data directory
      */
@@ -113,60 +87,6 @@ class CacheDownloader {
             logger.warn("Failed to delete $DISK_ZIP")
         }
     }
-    
-    private suspend fun downloadFile(
-        id: Int,
-        directory: File,
-        filename: String,
-        onProgress: ((Long, Long) -> Unit)?
-    ) = suspendCancellableCoroutine<Unit> { continuation ->
-        var isCompleted = false
-        var progressBar: ProgressBar? = null
-        
-        val listener = object : DownloadListener {
-            override fun onProgress(progress: Int, max: Long, current: Long) {
-                if (progressBar == null && max > 0) {
-                    progressBar = ProgressBarBuilder()
-                        .setTaskName(filename)
-                        .setInitialMax(max)
-                        .setStyle(ProgressBarStyle.UNICODE_BLOCK)
-                        .setUpdateIntervalMillis(100)
-                        .showSpeed()
-                        .build()
-                }
-                progressBar?.maxHint(max)
-                progressBar?.stepTo(current)
-                onProgress?.invoke(current, max)
-            }
 
-            override fun onError(exception: Exception) {
-                progressBar?.close()
-                logger.error("Error downloading $filename: ${exception.message}", exception)
-                if (!isCompleted) {
-                    isCompleted = true
-                    continuation.resumeWithException(Exception("Failed to fetch Cache please report", exception))
-                }
-            }
-
-            override fun onFinished() {
-                progressBar?.close()
-                logger.info("Finished downloading $filename")
-                if (!isCompleted) {
-                    isCompleted = true
-                    continuation.resume(Unit)
-                }
-            }
-        }
-
-        try {
-            OpenRS2.downloadByInternalID(id, directory, listener, filename)
-        } catch (e: Exception) {
-            progressBar?.close()
-            if (!isCompleted) {
-                isCompleted = true
-                continuation.resumeWithException(Exception("Failed to fetch Cache please report", e))
-            }
-        }
-    }
 }
 

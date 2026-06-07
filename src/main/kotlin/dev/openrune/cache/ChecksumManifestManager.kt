@@ -9,6 +9,7 @@ import dev.openrune.util.json
 import dev.openrune.util.jsonNoPretty
 import mu.KotlinLogging
 import java.io.File
+import java.util.zip.CRC32
 
 private val logger = KotlinLogging.logger {}
 
@@ -39,7 +40,14 @@ class ChecksumManifestManager(private val config: ServerConfig) {
             else -> null
         }
     }
-    
+
+    fun calculateCRC32(data: ByteArray): Long {
+        val crc = CRC32()
+        crc.update(data)
+        return crc.value
+    }
+
+
     /**
      * Create a checksum manifest from a loaded cache
      * @param cache The cache to calculate checksums for
@@ -66,7 +74,7 @@ class ChecksumManifestManager(private val config: ServerConfig) {
 
                 cache.files(index, archive).forEach { file ->
                     val fileData = cache.data(index, archive, file) ?: return@forEach
-                    val checksum = ChecksumManager.calculateCRC32(fileData)
+                    val checksum = calculateCRC32(fileData)
 
                     files[file] = FileChecksum(
                         index = index,

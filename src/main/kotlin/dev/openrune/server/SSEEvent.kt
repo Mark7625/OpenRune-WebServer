@@ -5,8 +5,8 @@ package dev.openrune.server
  */
 enum class SseEventType {
     STATUS,
-    ACTIVITY,
-    ZIP_PROGRESS
+    ZIP_PROGRESS,
+    DECODE_PROGRESS
 }
 
 /**
@@ -16,7 +16,3 @@ data class SseEvent(
     val type: SseEventType,
     val data: Any
 )
-
-
-
-

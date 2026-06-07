@@ -1,13 +1,12 @@
 package dev.openrune.cache.util
 
 import com.google.gson.Gson
+import dev.openrune.ServerConfig
+import dev.openrune.cache.diff.DiffBinaryCache
 import mu.KotlinLogging
 import java.io.File
 
 data class Xtea(
-    val archive: Int,
-    val name_hash: Long,
-    val name: String,
     val mapsquare: Int,
     var key: IntArray
 ) {
@@ -17,9 +16,6 @@ data class Xtea(
 
         other as Xtea
 
-        if (archive != other.archive) return false
-        if (name_hash != other.name_hash) return false
-        if (name != other.name) return false
         if (mapsquare != other.mapsquare) return false
         if (!key.contentEquals(other.key)) return false
 
@@ -27,9 +23,7 @@ data class Xtea(
     }
 
     override fun hashCode(): Int {
-        var result = archive
-        result = 31 * result + name_hash.hashCode()
-        result = 31 * result + name.hashCode()
+        var result = mapsquare
         result = 31 * result + mapsquare
         result = 31 * result + key.contentHashCode()
         return result
@@ -38,8 +32,8 @@ data class Xtea(
 
 object XteaLoader {
     private val logger = KotlinLogging.logger {}
-    
-    public val xteas: MutableMap<Int, Xtea> = mutableMapOf()
+
+    val xteas: MutableMap<Int, Xtea> = mutableMapOf()
     private val xteasList: MutableMap<Int, IntArray> = mutableMapOf()
 
     fun load(xteaLocation: File) {
@@ -52,57 +46,43 @@ object XteaLoader {
         }
         
         try {
-            val data: Array<Xtea> = Gson().fromJson(xteaLocation.readText(), Array<Xtea>::class.java)
-            data.forEach {
-                xteas[it.mapsquare] = it
-                xteasList[it.mapsquare] = it.key
-            }
-            logger.info { "Keys Loaded: ${xteasList.size}" }
+            val parsed = parseXteas(xteaLocation.readText())
+            loadFromRegionKeys(parsed)
+            logger.info { "Keys loaded from file: ${xteaLocation.name} (${xteasList.size})" }
         } catch (e: Exception) {
             logger.error("Failed to load XTEAs from ${xteaLocation.path}: ${e.message}", e)
         }
     }
 
+    fun loadFromDiffBinary(config: ServerConfig, rev: Int): Boolean {
+        val decoded = DiffBinaryCache.getDecodedRev(config, rev) ?: return false
+        val keys = decoded.xteasByRegion
+        if (keys.isEmpty()) return false
+        loadFromRegionKeys(keys)
+        logger.info { "Keys loaded from diff binary rev $rev (${xteasList.size})" }
+        return true
+    }
+
+    fun parseXteas(jsonText: String): Map<Int, IntArray> {
+        val data: Array<Xtea> = Gson().fromJson(jsonText, Array<Xtea>::class.java)
+        return data.associate { it.mapsquare to it.key.copyOf() }
+    }
+
+    fun loadFromRegionKeys(regionKeys: Map<Int, IntArray>) {
+        xteas.clear()
+        xteasList.clear()
+        regionKeys.forEach { (mapsquare, key) ->
+            val normalizedKey = if (key.size == 4) key.copyOf() else key.copyOf(4)
+            val xtea = Xtea(mapsquare = mapsquare, key = normalizedKey)
+            xteas[mapsquare] = xtea
+            xteasList[mapsquare] = normalizedKey.copyOf()
+        }
+    }
+
     fun getKeys(region: Int): IntArray? = xteasList[region]
-    
-    /**
-     * Get a copy of all current XTEAs
-     */
-    fun getXteasCopy(): Map<Int, Xtea> {
-        return xteas.mapValues { (_, xtea) ->
-            Xtea(
-                archive = xtea.archive,
-                name_hash = xtea.name_hash,
-                name = xtea.name,
-                mapsquare = xtea.mapsquare,
-                key = xtea.key.copyOf()
-            )
-        }
-    }
-    
-    /**
-     * Compare two XTEA maps and return region IDs that have changed keys
-     */
-    fun findChangedRegions(oldXteas: Map<Int, Xtea>, newXteas: Map<Int, Xtea>): Set<Int> {
-        val changedRegions = mutableSetOf<Int>()
-        
-        // Check for changed keys in existing regions
-        oldXteas.forEach { (regionId, oldXtea) ->
-            val newXtea = newXteas[regionId]
-            if (newXtea != null && !oldXtea.key.contentEquals(newXtea.key)) {
-                changedRegions.add(regionId)
-            }
-        }
-        
-        // Check for new regions (regions that exist in new but not in old)
-        newXteas.forEach { (regionId, _) ->
-            if (!oldXteas.containsKey(regionId)) {
-                changedRegions.add(regionId)
-            }
-        }
-        
-        return changedRegions
-    }
+
+    fun hasKeys(): Boolean = xteasList.isNotEmpty()
+
 }
 
 

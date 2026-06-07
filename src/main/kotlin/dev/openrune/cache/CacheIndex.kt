@@ -8,5 +8,5 @@ interface CacheIndex {
     val displayName: String
     val shouldChecksum: Boolean
     val archives: Set<Int>?
-        get() = null // null means check all archives (default behavior)
+        get() = null
 }

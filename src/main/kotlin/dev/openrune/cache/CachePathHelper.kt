@@ -5,10 +5,7 @@ import dev.openrune.cache.tools.CacheEnvironment
 import java.io.File
 
 object CachePathHelper {
-    /**
-     * Gets the base cache directory for the given configuration
-     * Path format: ./cache/{gameType}/{environment}/{rev}/
-     */
+
     fun getCacheDirectory(gameType: GameType, environment: CacheEnvironment, revision: Int): File {
         return File("cache")
             .resolve(gameType.name.lowercase())
@@ -16,32 +13,26 @@ object CachePathHelper {
             .resolve(revision.toString())
     }
 
-    /**
-     * Gets a file within the cache directory
-     * Path format: ./cache/{gameType}/{environment}/{rev}/{filePath}
-     */
-    fun getCacheFile(gameType: GameType, environment: CacheEnvironment, revision: Int, filePath: String): File {
-        return getCacheDirectory(gameType, environment, revision)
-            .resolve(filePath)
+    /** Parent of all revision dirs: cache/{gameType}/{environment}/ */
+    private fun getRevisionsParent(gameType: GameType, environment: CacheEnvironment): File {
+        return File("cache")
+            .resolve(gameType.name.lowercase())
+            .resolve(environment.name.lowercase())
     }
 
     /**
-     * Gets multiple files by their relative paths
+     * Flat directory for custom binary diff blobs (one file per rev).
+     * Path: cache/{gameType}/{environment}/diffs/
+     * Files: 100.bin, 101.bin, ...
      */
-    fun getCacheFiles(gameType: GameType, environment: CacheEnvironment, revision: Int, filePaths: List<String>): List<File> {
-        val baseDir = getCacheDirectory(gameType, environment, revision)
-        return filePaths.map { baseDir.resolve(it) }
+    fun getDiffBinaryDirectory(gameType: GameType, environment: CacheEnvironment): File {
+        return getRevisionsParent(gameType, environment).resolve("diffs")
     }
 
-    /**
-     * Ensures the cache directory exists and creates it if necessary
-     */
-    fun ensureCacheDirectory(gameType: GameType, environment: CacheEnvironment, revision: Int): File {
-        val dir = getCacheDirectory(gameType, environment, revision)
-        if (!dir.exists()) {
-            dir.mkdirs()
-        }
-        return dir
+    /** Binary diff file for a revision: cache/{gameType}/{environment}/diffs/{rev}.bin */
+    fun getDiffBinaryFile(gameType: GameType, environment: CacheEnvironment, revision: Int): File {
+        return getDiffBinaryDirectory(gameType, environment).resolve("$revision.bin")
     }
+
 }
 

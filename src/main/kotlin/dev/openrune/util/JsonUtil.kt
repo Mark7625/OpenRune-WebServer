@@ -6,10 +6,7 @@ import com.google.gson.GsonBuilder
 /**
  * Global Gson instance with consistent configuration
  */
-val json: Gson = GsonBuilder()
-    .setPrettyPrinting()
-    .create()
+val json: Gson = GsonBuilder().create()
 
-val jsonNoPretty: Gson = GsonBuilder()
-    .create()
+val jsonNoPretty: Gson = json
 

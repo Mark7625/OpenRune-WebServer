@@ -9,11 +9,31 @@ import mu.KotlinLogging
 
 private val logger = KotlinLogging.logger {}
 
+private const val NAV_OVERRIDES_ENV = "OPENRUNE_NAV_DISPLAY_OVERRIDES"
+
+private fun parseNavDisplayOverrides(raw: String?): Map<String, String> {
+    if (raw.isNullOrBlank()) return emptyMap()
+    return raw
+        .split(';', ',')
+        .mapNotNull { part ->
+            val token = part.trim()
+            if (token.isEmpty()) return@mapNotNull null
+            val idx = token.indexOf('=')
+            if (idx <= 0 || idx >= token.length - 1) return@mapNotNull null
+            val key = token.substring(0, idx).trim().lowercase()
+            val value = token.substring(idx + 1).trim()
+            if (key.isEmpty() || value.isEmpty()) return@mapNotNull null
+            key to value
+        }
+        .toMap()
+}
+
 fun main(args: Array<String>) {
-    val rev = args.getOrNull(0)?.toIntOrNull() ?: -1
+    val cacheID = args.getOrNull(0)?.toIntOrNull() ?: -1
     val game = args.getOrNull(1) ?: GameType.OLDSCHOOL.toString()
     val environmentType = args.getOrNull(2) ?: CacheEnvironment.LIVE.toString()
     val networkPort = args.getOrNull(3)?.toIntOrNull() ?: 8090
+    val navOverrideArg = args.getOrNull(4)
 
     val gameType = try {
         GameType.valueOf(game.uppercase())
@@ -27,11 +47,20 @@ fun main(args: Array<String>) {
         CacheEnvironment.LIVE
     }
 
+    val navDisplayNameOverrides = parseNavDisplayOverrides(
+        navOverrideArg ?: System.getenv(NAV_OVERRIDES_ENV)
+    )
+
+    if (navDisplayNameOverrides.isNotEmpty()) {
+        logger.info { "Loaded ${navDisplayNameOverrides.size} nav display-name override(s) from ${if (navOverrideArg != null) "CLI arg" else NAV_OVERRIDES_ENV}" }
+    }
+
     val config = ServerConfig(
-        revision = rev,
         gameType = gameType,
+        cacheID = cacheID,
         environment = cacheEnv,
-        port = networkPort
+        port = networkPort,
+        navDisplayNameOverrides = navDisplayNameOverrides,
     )
 
     runBlocking {

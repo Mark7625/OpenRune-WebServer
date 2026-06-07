@@ -26,7 +26,9 @@ object EndpointRegistry {
         val category: String,
         val queryParams: List<QueryParam> = emptyList(),
         val examples: List<String> = emptyList(),
-        val responseType: String? = null
+        val responseType: String? = null,
+        /** When set, this endpoint is shown once with a dropdown; the selected value is used as the path segment (e.g. overlays, underlays, textures). */
+        val pathOptions: List<String>? = null
     )
     
     data class EndpointsData(
@@ -53,7 +55,8 @@ object EndpointRegistry {
         category: String,
         queryParamsClass: KClass<*>? = null,
         responseType: String? = null,
-        examples: List<String> = emptyList()
+        examples: List<String> = emptyList(),
+        pathOptions: List<String>? = null
     ) {
         val queryParams = queryParamsClass?.let { extractQueryParams(it) } ?: emptyList()
         
@@ -65,7 +68,8 @@ object EndpointRegistry {
                 category = category,
                 queryParams = queryParams,
                 examples = examples,
-                responseType = responseType
+                responseType = responseType,
+                pathOptions = pathOptions
             )
         )
     }

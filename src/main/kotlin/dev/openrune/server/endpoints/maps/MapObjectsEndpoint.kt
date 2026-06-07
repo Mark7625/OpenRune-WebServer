@@ -1,80 +1,83 @@
 package dev.openrune.server.endpoints.maps
 
 import dev.openrune.ServerConfig
-import dev.openrune.cache.CachePathHelper
-import dev.openrune.util.json
-import com.google.gson.reflect.TypeToken
-import dev.openrune.cache.extractor.osrs.LocationCustom
-import io.ktor.http.*
-import io.ktor.server.application.*
-import io.ktor.server.response.*
-import mu.KotlinLogging
-import java.io.File
-
-private val logger = KotlinLogging.logger {}
+import dev.openrune.cache.diff.LocationCustom
+import io.ktor.http.HttpHeaders
+import io.ktor.http.HttpStatusCode
+import io.ktor.server.application.ApplicationCall
+import io.ktor.server.response.respond
 
 class MapObjectsEndpoint(private val config: ServerConfig) {
 
-    private val objectsDir: File by lazy {
-        CachePathHelper.getCacheDirectory(
-            config.gameType,
-            config.environment,
-            config.revision
-        ).resolve("extracted").resolve("maps").resolve("objects")
-    }
-
-    /**
-     * Find all locations of a given object ID.
-     */
     suspend fun findObjectsById(call: ApplicationCall, objectId: String) {
-        try {
-            val objectIdInt = objectId.toIntOrNull()
-            if (objectIdInt == null) {
-                call.respond(HttpStatusCode.BadRequest, "Invalid object ID. Must be a number")
-                return
-            }
+        call.appendMapJsonNoStore()
+        val objectIdInt = objectId.toIntOrNull()
+        if (objectIdInt == null) {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid object ID. Must be a number"))
+            return
+        }
 
-            if (!objectsDir.exists()) {
-                call.respond(HttpStatusCode.NotFound, mapOf(
-                    "error" to "Objects directory not found",
-                    "message" to "The extracted maps/objects folder does not exist."
-                ))
-                return
-            }
+        val requestedRev = mapRevisionFromQuery(call, config) ?: run {
+            call.respond(HttpStatusCode.BadRequest, mapOf("error" to "Invalid rev"))
+            return
+        }
 
-            val file = objectsDir.resolve("$objectIdInt.json")
-            if (!file.exists()) {
-                call.respond(HttpStatusCode.NotFound, mapOf(
-                    "error" to "Object not found",
-                    "message" to "Object ID $objectIdInt not found in extracted objects.",
+        val binRevs = diffBinaryRevisionsSet(config)
+        if (requestedRev !in binRevs) {
+            call.respondMissingDiffBinary(requestedRev)
+            return
+        }
+        if (!call.ensureDecodedRevisionReadyForMaps(config, requestedRev)) return
+
+        val regionIdParam = call.request.queryParameters["regionId"]?.toIntOrNull()
+        val resolved = decodedWithMapPayload(config, requestedRev) ?: run {
+            call.respond(
+                HttpStatusCode.NotFound,
+                mapOf(
+                    "error" to "No map object data available",
+                    "requestedRev" to requestedRev,
                     "objectId" to objectIdInt
-                ))
-                return
-            }
+                )
+            )
+            return
+        }
+        val (resolvedRev, decoded) = resolved
 
-            try {
-                val content = file.readText()
-                val type = object : TypeToken<List<LocationCustom>>() {}.type
-                val objects: List<LocationCustom> = json.fromJson(content, type)
-
+        val values: List<LocationCustom> = if (regionIdParam != null) {
+            val region = decoded.mapRegions[regionIdParam]
+            if (region == null) {
                 call.respond(
+                    HttpStatusCode.NotFound,
                     mapOf(
-                        "objectId" to objectIdInt,
-                        "count" to objects.size,
-                        "locations" to objects
+                        "error" to "Region $regionIdParam not found",
+                        "requestedRev" to requestedRev,
+                        "rev" to resolvedRev,
+                        "regionId" to regionIdParam
                     )
                 )
-            } catch (e: Exception) {
-                logger.error("Failed to parse $objectIdInt.json: ${e.message}", e)
-                call.respond(HttpStatusCode.InternalServerError, mapOf(
-                    "error" to "Failed to parse JSON",
-                    "message" to "Error parsing $objectIdInt.json: ${e.message}"
-                ))
+                return
             }
-
-        } catch (e: Exception) {
-            logger.error("Error retrieving object data: ${e.message}", e)
-            call.respond(HttpStatusCode.InternalServerError, "Internal server error: ${e.message}")
+            region.positions.filter { it.id == objectIdInt }
+        } else {
+            decoded.mapObjects[objectIdInt].orEmpty()
         }
+
+        call.respond(
+            mapOf(
+                "id" to objectIdInt,
+                "objectId" to objectIdInt,
+                "requestedRev" to requestedRev,
+                "rev" to resolvedRev,
+                "count" to values.size,
+                "objects" to values,
+                "locations" to values
+            )
+        )
     }
+}
+
+internal fun ApplicationCall.appendMapJsonNoStore() {
+    response.headers.append(HttpHeaders.CacheControl, "no-store, no-cache, must-revalidate")
+    response.headers.append(HttpHeaders.Pragma, "no-cache")
+    response.headers.append(HttpHeaders.Expires, "0")
 }
