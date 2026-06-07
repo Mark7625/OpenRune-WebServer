@@ -183,20 +183,10 @@ class WebServer(
             allowHost("localhost:3001", schemes = listOf("http"))
             allowHost("127.0.0.1:3001", schemes = listOf("http"))
 
-            listOf(
-                HttpMethod.Get,
-                HttpMethod.Post,
-                HttpMethod.Put,
-                HttpMethod.Delete,
-                HttpMethod.Patch,
-                HttpMethod.Head,
-                HttpMethod.Options,
-            ).forEach(::allowMethod)
+            // Do not call allowMethod — Ktor omits GET/HEAD/POST from preflight when non-simple
+            // methods are registered, which breaks GET + If-None-Match (conditionalJsonFetch).
 
-            allowHeader(HttpHeaders.ContentType)
-            allowHeader(HttpHeaders.Authorization)
-            allowHeader(HttpHeaders.Accept)
-            allowHeader(HttpHeaders.CacheControl)
+            allowHeaders { true }
 
             allowNonSimpleContentTypes = true
             maxAgeInSeconds = 86_400
@@ -242,6 +232,7 @@ class WebServer(
                     !path.startsWith("/endpoints/") &&
                     !path.startsWith("/diff") &&
                     !path.startsWith("/cache") &&
+                    !path.startsWith("/gameval") &&
                     !path.startsWith("/map") &&
                     !path.startsWith("/zip")
                 ) {
