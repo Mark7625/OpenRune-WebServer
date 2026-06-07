@@ -21,141 +21,6 @@ class WebCacheManager(
         val openRs2Timestamp: Long?
     )
 
-    companion object {
-        private const val TESTING_MODE = false
-        private val VERIFIED_INDICES = setOf(
-            OsrsCacheIndex.GAMEVALS.id,
-            OsrsCacheIndex.MODELS.id,
-            OsrsCacheIndex.SPRITES.id,
-            OsrsCacheIndex.TEXTURES.id,
-            OsrsCacheIndex.CONFIGS.id
-        )
-        private const val CACHE_INFO_FILE = "cache-info.json"
-        private const val MASTER_CHECKSUMS_FILE = "cache-master-checksums.json"
-        private const val DATA_CHECKSUM_FILE = "data.checksum"
-        private const val DATA_DIR = "data"
-        private const val CACHE_DIR = "cache"
-    }
-
-    suspend fun loadOrUpdate(onUpdatingDetected: ((Boolean, Double?, String?) -> Unit)? = null) = withContext(Dispatchers.IO) {
-        checkAndUpdateCacheInfo(onUpdatingDetected)
-        lookingForChanges(onUpdatingDetected)
-    }
-
-    suspend fun lookingForChanges(onUpdatingDetected: ((Boolean, Double?, String?) -> Unit)? = null) = withContext(Dispatchers.IO) {
-        val cacheDir = getCachePath()
-        val dataDir = File(cacheDir, DATA_DIR)
-
-        if (!dataDir.exists() || !dataDir.isDirectory) {
-            logger.warn("Data directory does not exist, cannot scan for changes")
-            return@withContext
-        }
-
-        logger.info("Scanning cache files for changes...")
-        onUpdatingDetected?.invoke(true, null, "Verifying Cache checksum")
-
-        val cache = Cache.load(File(dataDir, CACHE_DIR).toPath())
-        try {
-            val manifest = manifestManager.createManifest(cache)
-
-            val masterChecksumFile = File(cacheDir, MASTER_CHECKSUMS_FILE)
-            val cacheNeedsDownload = !File(cacheDir, CACHE_INFO_FILE).exists()
-            val baseProgress = if (cacheNeedsDownload) 50.0 else 0.0
-            val progressRange = if (cacheNeedsDownload) 50.0 else 100.0
-
-            val existingManifest = manifestManager.loadManifest(masterChecksumFile)
-            
-            if (existingManifest == null) {
-                // First time - extract all files
-                val totalFiles = manifest.indices.values.flatMap { it.archives.values.flatMap { archive -> archive.files.values } }
-                
-                if (!TESTING_MODE) {
-                    manifestManager.saveManifest(manifest, masterChecksumFile)
-                    logger.info("Master checksum calculated and saved for ${totalFiles.size} files")
-                } else {
-                    logger.info("Master checksum calculated for ${totalFiles.size} files (saving disabled for testing)")
-                }
-                
-                updateFiles(cache, totalFiles, baseProgress, progressRange, onUpdatingDetected)
-            } else {
-                // Compare with existing manifest
-                val differences = manifestManager.findDifferences(existingManifest, manifest)
-                if (differences.added.isNotEmpty() || differences.removed.isNotEmpty()) {
-                    logger.info("Found ${differences.added.size} added/changed files and ${differences.removed.size} removed files")
-                    
-                    // Delete all zip files since cache has changed
-                    deleteZipFiles()
-                    
-                    if (!TESTING_MODE) {
-                        manifestManager.saveManifest(manifest, masterChecksumFile)
-                        logger.debug("Updated checksum manifest saved")
-                    }
-                    
-                    updateFiles(cache, differences.added, baseProgress, progressRange, onUpdatingDetected)
-                } else {
-                    logger.info("No changes detected in cache files")
-                    
-                    // Update manifest timestamp even if no changes (to track when last checked)
-                    if (!TESTING_MODE) {
-                        manifestManager.saveManifest(manifest, masterChecksumFile)
-                        logger.debug("Checksum manifest timestamp updated")
-                    }
-                }
-            }
-        } finally {
-            // Always cleanup cache, even if extraction failed
-            cleanupAfterExtraction(cache)
-        }
-        
-        onUpdatingDetected?.invoke(false, null, null)
-    }
-    
-    /**
-     * Delete all zip files when cache is updated
-     */
-    private fun deleteZipFiles() {
-        zipService?.deleteAllZips()
-    }
-    
-    /**
-     * Clean up resources after extraction is complete
-     * - Closes cache file handles
-     * - Clears temporary data structures
-     * - Forces garbage collection
-     * - Ensures threads are cleaned up
-     */
-    private suspend fun cleanupAfterExtraction(cache: Cache) = withContext(Dispatchers.IO) {
-        try {
-            logger.info("Cleaning up extraction resources...")
-            
-            // Close cache file handles if cache implements Closeable/AutoCloseable
-            try {
-                if (cache is AutoCloseable) {
-                    cache.close()
-                    logger.debug("Cache file handles closed")
-                } else if (cache is java.io.Closeable) {
-                    cache.close()
-                    logger.debug("Cache file handles closed")
-                }
-            } catch (e: Exception) {
-                logger.warn("Error closing cache: ${e.message}")
-            }
-            
-            // Wait for any pending coroutines to complete
-            delay(50)
-            
-            // Force garbage collection to free up memory
-            System.gc()
-            
-            // Give GC and threads a moment to finish
-            delay(50)
-            
-            logger.info("Cleanup completed")
-        } catch (e: Exception) {
-            logger.warn("Error during cleanup: ${e.message}", e)
-        }
-    }
-
     private data class TargetResolution(
         val revision: Int,
         val expectedStamp: DiffOpenRs2Stamp?
@@ -286,8 +151,8 @@ class WebCacheManager(
         val env = config.environment.toString().lowercase()
         val cacheInfo = OpenRS2.allCaches.firstOrNull {
             it.id == cacheId &&
-                it.game.contains(game) &&
-                it.environment.equals(env, true)
+                    it.game.contains(game) &&
+                    it.environment.equals(env, true)
         } ?: return null
         return toStamp(cacheInfo)
     }
@@ -307,4 +172,3 @@ class WebCacheManager(
     }
 
 }
-
