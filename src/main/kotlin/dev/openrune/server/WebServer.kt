@@ -23,6 +23,7 @@ import io.ktor.server.routing.*
 import io.ktor.serialization.gson.*
 import io.ktor.server.plugins.compression.*
 import io.ktor.server.plugins.contentnegotiation.*
+import io.ktor.server.plugins.cors.routing.*
 import io.ktor.server.request.host
 import io.ktor.server.request.httpMethod
 import io.ktor.server.request.path
@@ -173,20 +174,42 @@ class WebServer(
         return "$scheme://$host$portPart"
     }
 
-    private fun ApplicationResponse.appendSseCorsHeaders() {
-        headers.append("Access-Control-Allow-Origin", "*")
-        headers.append("Access-Control-Allow-Methods", "GET, OPTIONS")
-        headers.append("Access-Control-Allow-Headers", "*")
-        headers.append("Access-Control-Expose-Headers", "*")
-        headers.append(HttpHeaders.CacheControl, "no-cache")
-        headers.append(HttpHeaders.Connection, "keep-alive")
+    private fun Application.installOpenRuneCors() {
+        install(CORS) {
+            allowHost("openrune.dev", schemes = listOf("https"))
+            allowHost("www.openrune.dev", schemes = listOf("https"))
+            allowHost("localhost:3000", schemes = listOf("http"))
+            allowHost("127.0.0.1:3000", schemes = listOf("http"))
+            allowHost("localhost:3001", schemes = listOf("http"))
+            allowHost("127.0.0.1:3001", schemes = listOf("http"))
+
+            listOf(
+                HttpMethod.Get,
+                HttpMethod.Post,
+                HttpMethod.Put,
+                HttpMethod.Delete,
+                HttpMethod.Patch,
+                HttpMethod.Head,
+                HttpMethod.Options,
+            ).forEach(::allowMethod)
+
+            allowHeader(HttpHeaders.ContentType)
+            allowHeader(HttpHeaders.Authorization)
+            allowHeader(HttpHeaders.Accept)
+            allowHeader(HttpHeaders.CacheControl)
+
+            allowNonSimpleContentTypes = true
+            maxAgeInSeconds = 86_400
+
+            exposeHeader("X-OpenRune-Cache-Debug")
+            exposeHeader(HttpHeaders.ETag)
+            exposeHeader(HttpHeaders.ContentDisposition)
+        }
     }
 
-    private fun ApplicationResponse.appendOptionsCorsHeaders() {
-        headers.append("Access-Control-Allow-Origin", "*")
-        headers.append("Access-Control-Allow-Methods", "GET, OPTIONS")
-        headers.append("Access-Control-Allow-Headers", "*")
-        headers.append("Access-Control-Max-Age", "86400")
+    private fun ApplicationResponse.appendSseStreamHeaders() {
+        headers.append(HttpHeaders.CacheControl, "no-cache")
+        headers.append(HttpHeaders.Connection, "keep-alive")
     }
 
     private fun buildSsePayload(event: SseEvent): String {
@@ -210,6 +233,7 @@ class WebServer(
             install(ContentNegotiation) {
                 gson { }
             }
+            installOpenRuneCors()
 
             intercept(ApplicationCallPipeline.Call) {
                 val path = call.request.path()
@@ -230,11 +254,6 @@ class WebServer(
             }
 
             routing {
-                options("/sse") {
-                    call.response.appendOptionsCorsHeaders()
-                    call.respond(HttpStatusCode.OK)
-                }
-
                 get("/status") {
                     call.respond(getCurrentStatusResponse())
                 }
@@ -258,7 +277,7 @@ class WebServer(
                         return@get
                     }
 
-                    call.response.appendSseCorsHeaders()
+                    call.response.appendSseStreamHeaders()
                     call.respondOutputStream(contentType = ContentType("text", "event-stream")) {
                         try {
                             try {

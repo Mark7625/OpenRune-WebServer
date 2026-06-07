@@ -20,6 +20,7 @@ dependencies {
     implementation("io.ktor:ktor-server-netty:2.3.5")
     implementation("io.ktor:ktor-server-content-negotiation:2.3.5")
     implementation("io.ktor:ktor-server-compression:2.3.5")
+    implementation("io.ktor:ktor-server-cors:2.3.5")
     implementation("io.ktor:ktor-serialization-gson:2.3.5")
     implementation("io.ktor:ktor-server-status-pages:2.3.5")
     implementation("dev.or2:all:2.4.1")
