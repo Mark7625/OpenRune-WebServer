@@ -1,0 +1,80 @@
+name: Release
+
+permissions:
+  contents: write
+
+on:
+  push:
+    tags:
+      - "v*"
+    branches:
+      - production
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set up JDK 11
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "11"
+          cache: gradle
+
+      - name: Build shadow JAR
+        run: |
+          chmod +x gradlew
+          ./gradlew shadowJar --no-daemon --stacktrace
+
+      - name: Verify JAR output
+        run: test -f build/libs/openrune-server.jar
+
+      - name: Set release metadata
+        id: meta
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+            NAME="Release ${TAG}"
+          else
+            DATE="$(date -u +'%Y-%m-%d')"
+            BRANCH="${GITHUB_REF_NAME}"
+            BRANCH_TAG="$(echo "$BRANCH" | tr '/' '-')"
+            SHORT_SHA="$(git rev-parse --short HEAD)"
+            TAG="${DATE}-${BRANCH_TAG}-${SHORT_SHA}"
+            NAME="${DATE} - ${BRANCH}"
+          fi
+
+          FULL_SHA="$(git rev-parse HEAD)"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "name=${NAME}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$(git rev-parse --short HEAD)" >> "$GITHUB_OUTPUT"
+          echo "commit_url=${{ github.server_url }}/${{ github.repository }}/commit/${FULL_SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: ${{ steps.meta.outputs.name }}
+          body: |
+            OpenRune WebServer shadow JAR.
+
+            **Commit:** [`${{ steps.meta.outputs.short_sha }}`](${{ steps.meta.outputs.commit_url }})
+
+            ## Run
+            ```bash
+            java -jar openrune-server.jar -1 OLDSCHOOL LIVE 8090
+            ```
+
+            ## Pterodactyl egg
+            - `JAR_UPDATE_REPO`: `Mark7625/OpenRune-WebServer`
+            - `SERVER_JAR`: `openrune-server.jar`
+          files: build/libs/openrune-server.jar
+          generate_release_notes: false
