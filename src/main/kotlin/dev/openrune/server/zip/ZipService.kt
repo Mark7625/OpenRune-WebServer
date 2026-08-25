@@ -4,6 +4,7 @@ import dev.openrune.ServerConfig
 import dev.openrune.cache.CachePathHelper
 import dev.openrune.cache.diff.DiffBinaryCache
 import dev.openrune.cache.diff.DefinitionSnapshot
+import dev.openrune.cache.diff.SpriteCdn
 import dev.openrune.server.endpoints.diff.getCombinedSprites
 import dev.openrune.server.SseEventType
 import kotlinx.coroutines.*
@@ -205,6 +206,7 @@ class ZipService(
             ids.sorted().forEach { id ->
                 val sourceRev = sourceRevById[id] ?: base
                 val bytes = DiffBinaryCache.getDecodedRev(config, sourceRev)?.sprites?.get(id)
+                    ?: SpriteCdn.fetchSpritePng(config.spriteCdn, config.gameType, sourceRev, id)
                 if (bytes != null) {
                     zos.putNextEntry(ZipEntry("$id.png"))
                     zos.write(bytes)

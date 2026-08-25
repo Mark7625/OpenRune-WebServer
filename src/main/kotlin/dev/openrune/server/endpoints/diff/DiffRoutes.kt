@@ -6,8 +6,10 @@ import dev.openrune.ServerConfig
 import dev.openrune.cache.CachePathHelper
 import dev.openrune.util.json
 import dev.openrune.cache.diff.ConfigDiffType
+import dev.openrune.cache.diff.ConfigSerializer
 import dev.openrune.cache.diff.DiffBinaryCache
 import dev.openrune.cache.diff.CacheBinaryFormat
+import dev.openrune.cache.diff.SpriteCdn
 import dev.openrune.cache.tools.OpenRS2
 import dev.openrune.cache.filestore.definition.SpriteDecoder
 import dev.openrune.cache.diff.DefinitionSnapshot
@@ -25,6 +27,8 @@ import io.ktor.server.request.*
 import io.ktor.server.response.*
 import io.ktor.server.routing.*
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import mu.KotlinLogging
 import java.io.ByteArrayInputStream
@@ -396,7 +400,7 @@ private fun manifestHasChanges(config: ServerConfig, rev: Int): Boolean {
     )
     DiffRouteCaches.manifestHasChanges.get(key)?.let { return it }
 
-    val manifest = DiffBinaryCache.getDecodedRev(config, rev)?.manifest ?: return false
+    val manifest = DiffBinaryCache.peekManifest(config, rev) ?: return false
     val sprites = manifest.sprites
     val hasChanges = when {
         sprites.added.isNotEmpty() || sprites.removed.isNotEmpty() || sprites.changed.isNotEmpty() -> true
@@ -435,9 +439,13 @@ private fun getSectionSupportManifest(config: ServerConfig, rev: Int): Map<Strin
             diffType.sectionId to hasRows
         }
 
+    // Prefer id-only sprite index for counts (avoids materializing PNG payloads).
+    val spriteCount = getCombinedSprites(config, 1, clamped).first.size
+    val textureCount = getTypedCombinedConfig(config, ConfigDiffType.TEXTURES.fileName, clamped).size
+
     val archiveSupport = linkedMapOf<String, Boolean>(
-        "sprites" to getCombinedSpriteData(config, 1, clamped).isNotEmpty(),
-        "textures" to (configSupport["textures"] == true),
+        "sprites" to (spriteCount > 0),
+        "textures" to (textureCount > 0),
         "gamevals" to (decoded?.gameval?.values?.any { it.isNotEmpty() } == true),
     )
 
@@ -448,6 +456,12 @@ private fun getSectionSupportManifest(config: ServerConfig, rev: Int): Map<Strin
         "rev" to clamped,
         "archives" to archiveSupport,
         "configs" to configSupport,
+        "counts" to mapOf(
+            "archives" to mapOf(
+                "sprites" to spriteCount,
+                "textures" to textureCount,
+            ),
+        ),
         "available" to mapOf(
             "archives" to archiveSupport.filterValues { it }.keys.sorted(),
             "configs" to supportedConfigs,
@@ -528,7 +542,7 @@ internal fun getRevisionsWithData(config: ServerConfig): Map<String, Any> {
     synchronized(computeLock) {
         DiffRouteCaches.revisionsWithData.get(cacheKey)?.let { return it }
         val withChanges = withManifest.filter { r -> manifestHasChanges(config, r) }
-        val hasUsableBase = DiffBinaryCache.getDecodedRev(config, 1) != null
+        val hasUsableBase = 1 in withManifest
         val revs = (withChanges + if (hasUsableBase) listOf(1) else emptyList())
             .distinct()
             .filter { it in available }
@@ -548,19 +562,20 @@ private fun diffBinaryRevisionsSet(config: ServerConfig): Set<Int> =
     DiffBinaryCache.listRevisionsWithBinary(config).toSet()
 
 /** Merge all delta revisions from 1 through [upToRev] to produce a complete typed snapshot map. */
-private fun getTypedCombinedConfig(config: ServerConfig, type: String, upToRev: Int): Map<Int, DefinitionSnapshot> {
-    val base = DiffBinaryCache.getDecodedRev(config, 1)?.configs?.get(type) ?: emptyMap()
-    if (upToRev <= 1) return base
-    val merged = base.toMutableMap()
-    for (r in 2..upToRev) {
-        val decoded = DiffBinaryCache.getDecodedRev(config, r) ?: continue
-        val summary = decoded.manifest.configs[type] ?: continue
-        summary.removed.forEach { id -> merged.remove(id) }
-        val delta = decoded.configs[type] ?: continue
-        summary.added.forEach   { id -> delta[id]?.let { merged[id] = it } }
-        summary.changed.forEach { id -> delta[id]?.let { merged[id] = it } }
+private fun getTypedCombinedConfig(config: ServerConfig, type: String, upToRev: Int): Map<Int, DefinitionSnapshot> =
+    DiffBinaryCache.getTypedCombinedConfig(config, type, upToRev)
+
+/** Keep only fields useful for table listing / search (drops huge dumps from cold /table builds). */
+private fun slimTableFields(type: String, fields: Map<String, Any?>): Map<String, Any?> {
+    val diffType = FILE_NAME_TO_DIFF_TYPE[type] ?: return fields
+    val keep = LinkedHashSet<String>()
+    keep.add("name")
+    keep.add("gameval")
+    for (aliases in diffType.tableColumns()) {
+        keep.addAll(aliases)
     }
-    return merged
+    if (keep.size <= 2 && diffType.tableColumns().isEmpty()) return fields
+    return fields.filterKeys { it in keep }
 }
 
 private fun rawValueToJson(value: Any?): Any? = when (value) {
@@ -585,6 +600,18 @@ private fun fieldEntryToJson(entry: FieldEntry): Any? {
 
 private fun typedSnapshotToJson(snap: DefinitionSnapshot): Map<String, Any?> =
     snap.entries.associate { (k, e) -> k to fieldEntryToJson(e) }
+
+private fun typedSnapshotToJsonWithGameval(
+    snap: DefinitionSnapshot,
+    id: Int,
+    idToGameval: Map<Int, String>?,
+): Map<String, Any?> {
+    val json = typedSnapshotToJson(snap).toMutableMap()
+    if (!json.containsKey("gameval")) {
+        idToGameval?.get(id)?.takeIf { it.isNotBlank() }?.let { json["gameval"] = it }
+    }
+    return json
+}
 
 /**
  * Revisions in [fromRev, toRev] that actually have a diff `.bin` on disk. Missing revs are skipped by
@@ -1198,46 +1225,90 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
                 call.appendNoStoreJsonHeaders()
                 val clientHash = parseIfNoneMatch(call.request.header(HttpHeaders.IfNoneMatch))
 
-                val payload: Map<String, Any?> = withContext(Dispatchers.Default) {
-                    if (gameValDumpKey != null) {
-                        val baseNames = loadIdToNameGamevals(config, base, gameValDumpKey)
-                        val revNames  = loadIdToNameGamevals(config, rev,  gameValDumpKey)
-                        val added   = (revNames.keys - baseNames.keys).sorted().associateWith { revNames[it] }
-                        val removed = (baseNames.keys - revNames.keys).sorted()
-                        val changed = (baseNames.keys intersect revNames.keys)
-                            .filter { baseNames[it] != revNames[it] }
-                            .associate { id -> id to mapOf("from" to baseNames[id], "to" to revNames[id]) }
-                        mapOf("base" to base, "rev" to rev, "type" to type, "added" to added, "removed" to removed, "changed" to changed)
-                    } else {
-                        val atBase = getTypedCombinedConfig(config, type, base)
-                        val atRev  = getTypedCombinedConfig(config, type, rev)
-                        val bIds = atBase.keys.toSet()
-                        val rIds = atRev.keys.toSet()
-                        val added   = (rIds - bIds).sorted().associateWith { id -> typedSnapshotToJson(atRev[id]!!) }
-                        val removed = (bIds - rIds).sorted()
-                        val changed = (bIds intersect rIds).filter { atBase[it] != atRev[it] }.sorted()
-                            .associate { id ->
-                                val baseSnap = atBase[id]!!
-                                val revSnap  = atRev[id]!!
-                                val allKeys  = baseSnap.keys + revSnap.keys
-                                val fieldDiffs = allKeys.filter { k -> baseSnap[k] != revSnap[k] }.associate { k ->
-                                    k to mapOf("from" to fieldEntryToJson(baseSnap[k] ?: FieldEntry(null)), "to" to fieldEntryToJson(revSnap[k] ?: FieldEntry(null)))
+                val contentCacheKey =
+                    "${config.gameType.name}|${config.environment.name}|$type|$base|$rev|${gameValDumpKey ?: ""}"
+                val cachedBody = DiffRouteCaches.configContent.get(contentCacheKey)
+                val body: CachedConfigContent = if (cachedBody != null) {
+                    cachedBody
+                } else {
+                    val mutex = DiffRouteCaches.configContentComputeMutexes.getOrPut(contentCacheKey) { Mutex() }
+                    mutex.withLock {
+                        DiffRouteCaches.configContent.get(contentCacheKey) ?: run {
+                            val payload: Map<String, Any?> = withContext(Dispatchers.Default) {
+                                if (gameValDumpKey != null) {
+                                    val baseNames = loadIdToNameGamevals(config, base, gameValDumpKey)
+                                    val revNames = loadIdToNameGamevals(config, rev, gameValDumpKey)
+                                    val added = (revNames.keys - baseNames.keys).sorted().associateWith { revNames[it] }
+                                    val removed = (baseNames.keys - revNames.keys).sorted()
+                                    val changed = (baseNames.keys intersect revNames.keys)
+                                        .filter { baseNames[it] != revNames[it] }
+                                        .associate { id -> id to mapOf("from" to baseNames[id], "to" to revNames[id]) }
+                                    mapOf(
+                                        "base" to base,
+                                        "rev" to rev,
+                                        "type" to type,
+                                        "added" to added,
+                                        "removed" to removed,
+                                        "changed" to changed,
+                                    )
+                                } else {
+                                    val atBase = getTypedCombinedConfig(config, type, base)
+                                    val atRev = getTypedCombinedConfig(config, type, rev)
+                                    val bIds = atBase.keys.toSet()
+                                    val rIds = atRev.keys.toSet()
+                                    val groupName = gamevalGroupNameForConfigType(type)
+                                    val revGamevals = groupName?.let { loadIdToNameGamevals(config, rev, it) }
+                                    val baseGamevals = groupName?.let { loadIdToNameGamevals(config, base, it) }
+                                    val added = (rIds - bIds).sorted().associateWith { id ->
+                                        typedSnapshotToJsonWithGameval(atRev[id]!!, id, revGamevals)
+                                    }
+                                    val removed = (bIds - rIds).sorted()
+                                    val changed = (bIds intersect rIds).filter { atBase[it] != atRev[it] }.sorted()
+                                        .associate { id ->
+                                            val baseSnap = atBase[id]!!
+                                            val revSnap = atRev[id]!!
+                                            val allKeys = baseSnap.keys + revSnap.keys
+                                            val fieldDiffs = allKeys.filter { k -> baseSnap[k] != revSnap[k] }.associate { k ->
+                                                k to mapOf(
+                                                    "from" to fieldEntryToJson(baseSnap[k] ?: FieldEntry(null)),
+                                                    "to" to fieldEntryToJson(revSnap[k] ?: FieldEntry(null)),
+                                                )
+                                            }
+                                            id.toString() to fieldDiffs
+                                        }
+                                    // Optional id→gameval for clients that synthesize section titles without a second fetch.
+                                    val gamevalsForHeaders = linkedMapOf<String, String>()
+                                    revGamevals?.forEach { (id, name) -> if (name.isNotBlank()) gamevalsForHeaders[id.toString()] = name }
+                                    baseGamevals?.forEach { (id, name) ->
+                                        if (name.isNotBlank()) gamevalsForHeaders.putIfAbsent(id.toString(), name)
+                                    }
+                                    mapOf(
+                                        "base" to base,
+                                        "rev" to rev,
+                                        "type" to type,
+                                        "added" to added,
+                                        "removed" to removed,
+                                        "changed" to changed,
+                                        "gamevals" to gamevalsForHeaders,
+                                    )
                                 }
-                                id.toString() to fieldDiffs
                             }
-                        mapOf("base" to base, "rev" to rev, "type" to type, "added" to added, "removed" to removed, "changed" to changed)
+                            val jsonText = json.toJson(payload)
+                            val etag = md5HexUtf8(jsonText)
+                            val built = CachedConfigContent(etag = etag, jsonText = jsonText)
+                            DiffRouteCaches.configContent.put(contentCacheKey, built)
+                            built
+                        }
                     }
                 }
-                val jsonText = json.toJson(payload)
-                val etag = md5HexUtf8(jsonText)
-                call.response.header(HttpHeaders.ETag, "\"$etag\"")
-                if (clientHash != null && clientHash == etag) {
+                call.response.header(HttpHeaders.ETag, "\"${body.etag}\"")
+                if (clientHash != null && clientHash == body.etag) {
                     call.openRuneCacheDebug(CachePayloadOutcome.NOT_MODIFIED_NO_BODY, "diff/config/content", cacheLogStartNs, "INM=ETag type=$type")
                     call.respond(HttpStatusCode.NotModified)
                     return@get
                 }
                 call.openRuneCacheDebug(CachePayloadOutcome.FULL_BODY, "diff/config/content", cacheLogStartNs, "type=$type")
-                call.respondText(jsonText, ContentType.Application.Json)
+                call.respondText(body.jsonText, ContentType.Application.Json)
             } catch (e: Exception) {
                 logger.error(e) { "diff config content failed: ${e.message}" }
                 call.respond(HttpStatusCode.InternalServerError, mapOf("error" to (e.message ?: "Config content failed")))
@@ -1265,6 +1336,7 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
                 call.respond(
                     mapOf(
                         "fields" to diffType.fieldProps(),
+                        "dumpFields" to ConfigSerializer.dumpFieldNames(diffType),
                         "tableColumns" to tableColumns,
                         "searchModes" to diffType.searchFields(),
                         "hasGameval" to (diffType.navGamevalType != null),
@@ -1327,8 +1399,16 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
                             loadIdToNameGamevals(config, rev, gameValDumpKey).entries.sortedBy { it.key }
                                 .map { (id, name) -> mapOf("id" to id, "fields" to mapOf("name" to name)) }
                         } else {
+                            val groupName = gamevalGroupNameForConfigType(type)
+                            val idToGameval = groupName?.let { loadIdToNameGamevals(config, rev, it) }
                             getTypedCombinedConfig(config, type, rev).entries.sortedBy { it.key }
-                                .map { (id, snap) -> mapOf("id" to id, "fields" to typedSnapshotToJson(snap)) }
+                                .map { (id, snap) ->
+                                    val fields = slimTableFields(
+                                        type,
+                                        typedSnapshotToJsonWithGameval(snap, id, idToGameval),
+                                    )
+                                    mapOf("id" to id, "fields" to fields)
+                                }
                         }
                         val byId = rows.mapNotNull { row -> (row["id"] as? Int)?.let { it to row } }.toMap()
                         CachedConfigRows(allRows = rows, rowById = byId)
@@ -1586,22 +1666,57 @@ private suspend fun ApplicationCall.respondSprite(config: ServerConfig, id: Int)
     val base = (request.queryParameters["base"]?.toIntOrNull() ?: 1).coerceIn(1, MAX_DIFF_REV)
     val rev = (request.queryParameters["rev"]?.toIntOrNull() ?: config.revision).coerceIn(base, MAX_DIFF_REV)
     val sourceRev = request.queryParameters["source"]?.toIntOrNull()?.coerceIn(1, MAX_DIFF_REV)
-    val pngBytes = if (sourceRev != null) {
-        DiffBinaryCache.getDecodedRev(config, sourceRev)?.sprites?.get(id)
-    } else {
-        getCombinedSpriteData(config, base, rev)[id]?.bytes
-    } ?: run {
+    val width = request.queryParameters["width"]?.toIntOrNull()
+    val height = request.queryParameters["height"]?.toIntOrNull()
+    val keepAspect = request.queryParameters["keepAspectRatio"]?.toBooleanStrictOrNull()
+        ?: request.queryParameters["keepAspect"]?.toBooleanStrictOrNull()
+        ?: true
+    val needsResize = (width != null && width > 0) || (height != null && height > 0)
+
+    val resolvedSource = sourceRev
+        ?: resolveSpriteSourceRevById(config, base, rev, setOf(id))[id]
+        ?: rev
+    val binBytes = DiffBinaryCache.getDecodedRev(config, resolvedSource)?.sprites?.get(id)
+        ?: getCombinedSpriteData(config, base, rev)[id]?.bytes
+
+    val cdn = config.spriteCdn
+    val loadedPng = binBytes
+        ?: if (cdn.canServe) SpriteCdn.fetchSpritePng(cdn, config.gameType, resolvedSource, id) else null
+    if (loadedPng == null) {
         respond(HttpStatusCode.NotFound, mapOf("error" to "Sprite $id not found"))
         return
+    }
+    val pngBytes: ByteArray = loadedPng
+
+    // No resize + prefer CDN redirect when we did not already have local bytes.
+    if (!needsResize && cdn.canServe && binBytes == null) {
+        val location = SpriteCdn.publicSpriteUrl(cdn, config.gameType, resolvedSource, id)
+        if (location != null) {
+            response.header(HttpHeaders.CacheControl, "public, max-age=86400, stale-while-revalidate=604800")
+            openRuneCacheDebug(CachePayloadOutcome.FULL_BODY, "diff/sprite/png", cacheLogStartNs, "CDN redirect")
+            respondRedirect(location, permanent = false)
+            return
+        }
+    }
+
+    val outBytes: ByteArray = if (needsResize) {
+        SpriteCdn.resizePng(pngBytes, width, height, keepAspect)
+    } else {
+        pngBytes
     }
 
     val etagKey = SpriteEtagCacheKey(
         game = config.gameType.name,
         environment = config.environment.name,
-        sourceRev = sourceRev ?: rev,
+        sourceRev = resolvedSource,
         id = id
     )
-    val etag = DiffRouteCaches.spriteEtag.getOrPut(etagKey) { spriteContentHash(pngBytes) }
+    val etagSeed = if (needsResize) "$resolvedSource:$id:${width ?: 0}x${height ?: 0}:$keepAspect" else null
+    val etag = if (etagSeed != null) {
+        spriteContentHash(etagSeed.toByteArray(Charsets.UTF_8) + outBytes)
+    } else {
+        DiffRouteCaches.spriteEtag.getOrPut(etagKey) { spriteContentHash(outBytes) }
+    }
     val clientEtag = request.header(HttpHeaders.IfNoneMatch)
         ?.trim()
         ?.removePrefix("W/")
@@ -1616,8 +1731,8 @@ private suspend fun ApplicationCall.respondSprite(config: ServerConfig, id: Int)
         return
     }
 
-    openRuneCacheDebug(CachePayloadOutcome.FULL_BODY, "diff/sprite/png", cacheLogStartNs, "full PNG")
-    respondBytes(pngBytes, ContentType.Image.PNG)
+    openRuneCacheDebug(CachePayloadOutcome.FULL_BODY, "diff/sprite/png", cacheLogStartNs, if (needsResize) "resized PNG" else "full PNG")
+    respondBytes(outBytes, ContentType.Image.PNG)
 }
 
 private suspend fun ApplicationCall.respondSpriteRaw(config: ServerConfig, id: Int) {
@@ -1685,18 +1800,50 @@ internal fun getCombinedSprites(config: ServerConfig, base: Int, rev: Int): Pair
     val computeLock = DiffRouteCaches.combinedSpritesComputeLocks.computeIfAbsent(key) { Any() }
     synchronized(computeLock) {
         DiffRouteCaches.combinedSprites.get(key)?.let { return it }
-
-        val revData = getCombinedSpriteData(config, base, rev)
-        val sourceRevById = resolveSpriteSourceRevById(config, base, rev, revData.keys)
-        if (rev == base) {
-            val result = revData.keys.sorted() to sourceRevById
-            DiffRouteCaches.combinedSprites.put(key, result)
-            return result
-        }
-        val result = revData.keys.sorted() to sourceRevById
+        val result = buildCombinedSpriteIndex(config, base, rev)
         DiffRouteCaches.combinedSprites.put(key, result)
         return result
     }
+}
+
+/** Id set + source rev from manifests (works when PNG payloads were omitted from .bin). */
+private fun buildCombinedSpriteIndex(config: ServerConfig, base: Int, rev: Int): Pair<List<Int>, Map<Int, Int>> {
+    val clampedBase = base.coerceAtLeast(1)
+    val clampedRev = rev.coerceAtLeast(clampedBase)
+    val ids = linkedSetOf<Int>()
+    val source = linkedMapOf<Int, Int>()
+
+    val baseDecoded = DiffBinaryCache.getDecodedRev(config, clampedBase)
+    if (baseDecoded != null) {
+        val baseIds = when {
+            baseDecoded.sprites.isNotEmpty() -> baseDecoded.sprites.keys
+            baseDecoded.spriteMetadata.isNotEmpty() -> baseDecoded.spriteMetadata.keys
+            else -> baseDecoded.manifest.sprites.added.toSet()
+        }
+        baseIds.forEach { id ->
+            ids.add(id)
+            source[id] = clampedBase
+        }
+    }
+    if (clampedRev <= clampedBase) return ids.sorted() to source
+
+    for (r in (clampedBase + 1)..clampedRev) {
+        val decoded = DiffBinaryCache.getDecodedRev(config, r) ?: continue
+        val summary = decoded.manifest.sprites
+        summary.removed.forEach { id ->
+            ids.remove(id)
+            source.remove(id)
+        }
+        summary.added.forEach { id ->
+            ids.add(id)
+            source[id] = r
+        }
+        summary.changed.forEach { id ->
+            ids.add(id)
+            source[id] = r
+        }
+    }
+    return ids.sorted() to source
 }
 
 private data class CombinedSpriteEntry(
@@ -1760,22 +1907,9 @@ private fun resolveSpriteSourceRevById(
     rev: Int,
     presentIds: Set<Int>
 ): Map<Int, Int> {
-    val clampedBase = base.coerceAtLeast(1)
-    val clampedRev = rev.coerceAtLeast(clampedBase)
-    val source = presentIds.associateWith { clampedBase }.toMutableMap()
-    if (clampedRev <= clampedBase) return source
-    for (r in (clampedBase + 1)..clampedRev) {
-        val decoded = DiffBinaryCache.getDecodedRev(config, r) ?: continue
-        val summary = decoded.manifest.sprites
-        summary.removed.forEach { id -> source.remove(id) }
-        summary.added.forEach { id ->
-            if (id in presentIds && decoded.sprites.containsKey(id)) source[id] = r
-        }
-        summary.changed.forEach { id ->
-            if (id in presentIds && decoded.sprites.containsKey(id)) source[id] = r
-        }
-    }
-    return source
+    val (_, source) = buildCombinedSpriteIndex(config, base, rev)
+    if (presentIds.isEmpty()) return source
+    return source.filterKeys { it in presentIds }
 }
 
 private fun areSpritesVisuallyEqual(a: ByteArray, b: ByteArray): Boolean {

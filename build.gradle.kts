@@ -23,7 +23,7 @@ dependencies {
     implementation("io.ktor:ktor-server-cors:2.3.5")
     implementation("io.ktor:ktor-serialization-gson:2.3.5")
     implementation("io.ktor:ktor-server-status-pages:2.3.5")
-    implementation("dev.or2:all:2.4.1")
+    implementation("dev.or2:all:2.4.14")
     implementation("cc.ekblad:4koma:1.2.2-openrune")
 
     // JSON serialization with Gson
@@ -41,6 +41,10 @@ dependencies {
 
     // Zstd compression for diff binary format
     implementation("com.github.luben:zstd-jni:1.5.5-11")
+
+    // Sprite CDN uploads (S3 → CloudFront)
+    implementation(platform("software.amazon.awssdk:bom:2.25.60"))
+    implementation("software.amazon.awssdk:s3")
 
     testImplementation(kotlin("test"))
 }
@@ -98,8 +102,8 @@ tasks {
     }
 
     registerBootTask("bootRunescape",    -1,   "RUNESCAPE3", "LIVE")
-    registerBootTask("bootOldschool",    2518, "OLDSCHOOL",   "LIVE")
-    registerBootTaskDev("bootOldschoolDev", 2518,   "OLDSCHOOL",   "DEV")
+    registerBootTask("bootOldschool",    2644, "OLDSCHOOL",   "LIVE")
+    registerBootTaskDev("bootOldschoolDev", 2644,   "OLDSCHOOL",   "DEV")
     registerBootTask("bootSailing",      -1,   "OLDSCHOOL",   "BETA")
 
     register<JavaExec>("runDownloadAllCaches") {
@@ -115,6 +119,37 @@ tasks {
         mainClass.set("dev.openrune.DumperMainKt")
         classpath = sourceSets["main"].runtimeClasspath
         jvmArgs("-Xmx4G")
+    }
+
+    register<JavaExec>("migrateSpritesToCdn") {
+        group = "cdn"
+        description =
+            "Upload sprite PNGs from local .bin diffs to S3/R2 CDN (reconstructs full set per rev). " +
+                "Props: -PcdnFrom=1 -PcdnTo=500 -PcdnDryRun=true -PcdnRepair=true -PcdnSkipUnchanged=true"
+        mainClass.set("dev.openrune.MigrateSpritesToCdnMainKt")
+        classpath = sourceSets["main"].runtimeClasspath
+        jvmArgs("-Xmx8G")
+        // Prefer working dir = project root so cache/ + .env resolve.
+        workingDir = rootProject.projectDir
+
+        val passProps = listOf(
+            "cdnGame",
+            "cdnEnv",
+            "cdnFrom",
+            "cdnTo",
+            "cdnDryRun",
+            "cdnSkipUnchanged",
+            "cdnRepair",
+        )
+        for (key in passProps) {
+            if (project.hasProperty(key)) {
+                systemProperty(key, project.property(key).toString())
+            }
+        }
+        // Also accept CLI args after -- e.g. gradlew migrateSpritesToCdn -- dryRun=true from=100
+        if (project.hasProperty("cdnArgs")) {
+            args = project.property("cdnArgs").toString().split(Regex("\\s+")).filter { it.isNotBlank() }
+        }
     }
 }
 

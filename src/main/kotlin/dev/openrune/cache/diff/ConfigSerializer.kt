@@ -6,8 +6,25 @@ import dev.openrune.cache.gameval.impl.Interface
 import dev.openrune.definition.EntityOpsDefinition
 import dev.openrune.definition.GameValGroupTypes
 import dev.openrune.definition.type.EnumType
+import dev.openrune.definition.type.HealthBarType
+import dev.openrune.definition.type.InventoryType
+import dev.openrune.definition.type.ItemType
+import dev.openrune.definition.type.MapElementType
+import dev.openrune.definition.type.NpcType
+import dev.openrune.definition.type.ObjectType
+import dev.openrune.definition.type.OverlayType
 import dev.openrune.definition.type.ParamType
+import dev.openrune.definition.type.SequenceType
+import dev.openrune.definition.type.SpotAnimType
+import dev.openrune.definition.type.StructType
+import dev.openrune.definition.type.TextureType
+import dev.openrune.definition.type.UnderlayType
+import dev.openrune.definition.type.VarBitType
 import dev.openrune.definition.type.VarClanType
+import dev.openrune.definition.type.VarClientType
+import dev.openrune.definition.type.VarpType
+import dev.openrune.definition.type.WorldEntityType
+import dev.openrune.definition.type.WorldMapAreaType
 import dev.openrune.definition.util.CacheVarLiteral
 import java.lang.reflect.Method
 import java.lang.reflect.Modifier
@@ -183,6 +200,64 @@ object ConfigSerializer {
         }
 
         return result
+    }
+
+    /**
+     * All dumpable output field names for [diffType] (declaration order),
+     * including remapped keys and query synthetics (`id`, `gameval`, `_header`, `text`).
+     */
+    fun dumpFieldNames(diffType: ConfigDiffType<*>): List<String> {
+        val clazz = definitionClass(diffType) ?: return syntheticQueryFields(diffType)
+        val setup = diffType.typeSetup
+        val out = linkedSetOf<String>()
+        out.addAll(syntheticQueryFields(diffType))
+
+        if (clazz == EnumType::class.java) {
+            out += listOf("key", "value", "default", "valuesCount", "values")
+            return out.toList()
+        }
+
+        for (acc in propAccessors(clazz)) {
+            val propName = acc.name
+            if (propName == "id" || propName in setup.ignoredProps) continue
+            out += setup.customKeys[propName] ?: propName
+        }
+
+        if (clazz == ParamType::class.java) {
+            out += listOf("defaultInt", "defaultString", "defaultLong")
+        }
+
+        return out.toList()
+    }
+
+    private fun syntheticQueryFields(diffType: ConfigDiffType<*>): List<String> {
+        val out = linkedSetOf("id", "_header", "text")
+        if (diffType.navGamevalType != null) out += "gameval"
+        return out.toList()
+    }
+
+    private fun definitionClass(diffType: ConfigDiffType<*>): Class<*>? = when (diffType) {
+        ConfigDiffType.INV -> InventoryType::class.java
+        ConfigDiffType.OVERLAY -> OverlayType::class.java
+        ConfigDiffType.UNDERLAY -> UnderlayType::class.java
+        ConfigDiffType.TEXTURES -> TextureType::class.java
+        ConfigDiffType.NPCS -> NpcType::class.java
+        ConfigDiffType.ITEMS -> ItemType::class.java
+        ConfigDiffType.OBJECTS -> ObjectType::class.java
+        ConfigDiffType.PARAMS -> ParamType::class.java
+        ConfigDiffType.SEQUENCE -> SequenceType::class.java
+        ConfigDiffType.SPOTANIMS -> SpotAnimType::class.java
+        ConfigDiffType.ENUMS -> EnumType::class.java
+        ConfigDiffType.HEALTHBARS -> HealthBarType::class.java
+        ConfigDiffType.MAPELEMENTS -> MapElementType::class.java
+        ConfigDiffType.VARP -> VarpType::class.java
+        ConfigDiffType.VARBIT -> VarBitType::class.java
+        ConfigDiffType.WORLDENTITY -> WorldEntityType::class.java
+        ConfigDiffType.WORLDMAPAREA -> WorldMapAreaType::class.java
+        ConfigDiffType.STRUCTS -> StructType::class.java
+        ConfigDiffType.VARCLAN -> VarClanType::class.java
+        ConfigDiffType.VARCLIENT -> VarClientType::class.java
+        ConfigDiffType.INTERFACES -> InterfaceEntry::class.java
     }
 
     // ── Field entry construction ──────────────────────────────────────────────

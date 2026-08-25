@@ -2,6 +2,7 @@ package dev.openrune.cache.diff
 
 import dev.openrune.OsrsCacheProvider
 import dev.openrune.ServerConfig
+import dev.openrune.SpriteCdnConfig
 import dev.openrune.cache.CLIENTSCRIPT
 import dev.openrune.cache.CacheDownloader
 import dev.openrune.cache.CachePathHelper
@@ -76,6 +77,7 @@ class DiffDumper(
     private val environment: CacheEnvironment,
     private val downloader: CacheDownloader = CacheDownloader(),
     private val onProgress: (message: String) -> Unit = { logger.info(it) },
+    private val spriteCdn: SpriteCdnConfig = SpriteCdnConfig.fromEnv(),
 ) {
     private val legacyXteasByRevision = ConcurrentHashMap<Int, Map<Int, IntArray>>()
 
@@ -665,19 +667,24 @@ class DiffDumper(
             )
             manifestManager.saveManifest(checksumManifest, File(cacheDir, "cache-master-checksums.json"))
             progress(96, "Writing binary")
+            val spritesForBin = if (spriteCdn.includeSpritesInBin) spriteBytes else emptyMap()
             val binFile = writeDiffBinaryForRevision(
                 1,
                 preferredOpenRs2CacheId,
                 diffManifest,
                 configs,
                 gameval,
-                spriteBytes,
+                spritesForBin,
                 spriteMetadata,
                 mapData,
                 xteasByRegion,
                 interfaceManifest,
                 clientScripts,
             )
+            progress(98, "Publishing sprites CDN")
+            SpriteCdn.publishRevisionSprites(spriteCdn, gameType, 1, spriteBytes) { msg ->
+                progress(98, msg)
+            }
             val ms = (System.nanoTime() - t0) / 1_000_000.0
             progress(100, "Done -> ${binFile.name} (${ms.toLong()}ms)")
         }
@@ -777,19 +784,25 @@ class DiffDumper(
             progress(95, "Extracting map data")
             val (xteasByRegion, mapData) = extractMapDataForRevision(rev, cache, preferredOpenRs2CacheId, barUpdater, ::progress, 95, 4)
             progress(99, "Writing binary")
+            val spritesForBin = if (spriteCdn.includeSpritesInBin) deltaSprites else emptyMap()
             val binFile = writeDiffBinaryForRevision(
                 rev,
                 preferredOpenRs2CacheId,
                 diffManifest,
                 deltaConfigs,
                 gameval,
-                deltaSprites,
+                spritesForBin,
                 deltaSpriteMetadata,
                 mapData,
                 xteasByRegion,
                 interfaceManifest,
                 clientScripts,
             )
+            progress(99, "Publishing sprites CDN")
+            // Upload the full live set for this rev so CDN paths are self-contained.
+            SpriteCdn.publishRevisionSprites(spriteCdn, gameType, rev, currentSprites) { msg ->
+                progress(99, msg)
+            }
             val ms = (System.nanoTime() - t0) / 1_000_000.0
             if (barUpdater == null) onProgress(
                 "Rev $rev: done -> ${binFile.name} " +

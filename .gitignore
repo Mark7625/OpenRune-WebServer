@@ -18,11 +18,9 @@ Thumbs.db
 cache-manifest.json
 update-data/
 *.log
-
-
-
-
-
+.env
+.env.*
+!.env.example
 
 /cache
 /map

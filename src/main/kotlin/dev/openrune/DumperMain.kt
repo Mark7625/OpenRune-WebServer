@@ -8,6 +8,7 @@ import dev.openrune.cache.tools.OpenRS2
 import kotlinx.coroutines.runBlocking
 
 fun main(args: Array<String>) {
+    loadDotEnv()
     val gameType = GameType.OLDSCHOOL
     val environment = CacheEnvironment.LIVE
 

@@ -45,7 +45,7 @@ internal const val MAX_CONFIG_ROWS_CACHE_ENTRIES = 200
 internal const val AVAILABLE_REVISIONS_CACHE_TTL_MS = 60_000L
 internal const val CONFIG_TABLE_SEARCH_CACHE_TTL_MS = 60 * 60 * 1000L
 
-internal data class CachedConfigContent(val hash: String, val lines: List<Map<String, Any?>>)
+internal data class CachedConfigContent(val etag: String, val jsonText: String)
 
 internal data class ConfigTableRowDto(val id: Int, val sectionId: String, val entries: Map<String, String>)
 

@@ -29,6 +29,8 @@ private fun parseNavDisplayOverrides(raw: String?): Map<String, String> {
 }
 
 fun main(args: Array<String>) {
+    loadDotEnv()
+
     val cacheID = args.getOrNull(0)?.toIntOrNull() ?: -1
     val game = args.getOrNull(1) ?: GameType.OLDSCHOOL.toString()
     val environmentType = args.getOrNull(2) ?: CacheEnvironment.LIVE.toString()
@@ -61,7 +63,16 @@ fun main(args: Array<String>) {
         environment = cacheEnv,
         port = networkPort,
         navDisplayNameOverrides = navDisplayNameOverrides,
+        spriteCdn = SpriteCdnConfig.fromEnv(),
     )
+
+    if (config.spriteCdn.enabled) {
+        logger.info {
+            "Sprite CDN enabled bucket=${config.spriteCdn.bucket} baseUrl=${config.spriteCdn.baseUrl} " +
+                "endpoint=${config.spriteCdn.endpoint ?: "aws-default"} " +
+                "spritesInBin=${config.spriteCdn.includeSpritesInBin}"
+        }
+    }
 
     runBlocking {
         val server = WebServer(config)

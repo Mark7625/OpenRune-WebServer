@@ -5,7 +5,7 @@ import dev.openrune.cache.WebCacheManager
 import dev.openrune.cache.tools.OpenRS2
 import dev.openrune.cache.diff.ConfigDiffType
 import dev.openrune.cache.diff.DiffBinaryCache
-import dev.openrune.server.endpoints.diff.getCombinedSprites
+import dev.openrune.cache.diff.cdnSlug
 import dev.openrune.server.endpoints.diff.getRevisionsWithData
 import dev.openrune.server.endpoints.diff.registerDiffEndpoints
 import dev.openrune.server.endpoints.cache.registerCacheEndpoints
@@ -47,6 +47,10 @@ data class StatusResponse(
     val port: Int,
     val statusMessage: String? = null,
     val progress: Double? = null,
+    /** Public CloudFront/S3 origin for sprites (no trailing slash), when configured. */
+    val spritesCdnBase: String? = null,
+    /** Path slug used under the CDN (osrs / rs3). */
+    val spritesCdnGame: String? = null,
 )
 
 class WebServer(
@@ -108,6 +112,8 @@ class WebServer(
             port = config.port,
             statusMessage = message,
             progress = updateProgress,
+            spritesCdnBase = config.spriteCdn.baseUrl?.takeIf { config.spriteCdn.canServe },
+            spritesCdnGame = config.gameType.cdnSlug().takeIf { config.spriteCdn.canServe },
         )
     }
 
@@ -443,10 +449,9 @@ class WebServer(
             logger.info("Cache loaded. Server is LIVE.")
             CoroutineScope(Dispatchers.Default).launch {
                 runCatching {
-                    val revisionsPayload = getRevisionsWithData(config)
-                    val currentRev = (revisionsPayload["serverRevision"] as? Int ?: config.revision).coerceAtLeast(1)
-                    getCombinedSprites(config, 1, currentRev)
-                    logger.info("Startup precompute complete: revisions + combined sprites (base=1, rev=$currentRev)")
+                    // Revision list uses lightweight manifest peeks — do not pull every .bin into RAM.
+                    getRevisionsWithData(config)
+                    logger.info("Startup precompute complete: revisions list (combined sprites deferred to first request)")
                 }.onFailure { e ->
                     logger.warn("Startup precompute failed: ${e.message}")
                 }

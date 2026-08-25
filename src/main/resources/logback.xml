@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+    <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{HH:mm:ss.SSS} [%thread] %-5level %logger{36} -- %msg%n</pattern>
+        </encoder>
+    </appender>
+
+    <!-- Quiet AWS SDK / Apache HTTP (signing + request spam at DEBUG) -->
+    <logger name="software.amazon.awssdk" level="WARN"/>
+    <logger name="software.amazon.awssdk.request" level="WARN"/>
+    <logger name="software.amazon.awssdk.http" level="WARN"/>
+    <logger name="software.amazon.awssdk.auth" level="WARN"/>
+    <logger name="org.apache.http" level="WARN"/>
+    <logger name="io.netty" level="WARN"/>
+
+    <logger name="dev.openrune" level="INFO"/>
+
+    <root level="INFO">
+        <appender-ref ref="STDOUT"/>
+    </root>
+</configuration>

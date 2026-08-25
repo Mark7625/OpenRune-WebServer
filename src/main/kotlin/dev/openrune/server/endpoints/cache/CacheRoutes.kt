@@ -53,20 +53,47 @@ private fun fieldEntryToJson(entry: FieldEntry): Any? {
 private fun snapshotToJson(snapshot: DefinitionSnapshot): Map<String, Any?> =
     snapshot.entries.associate { (k, e) -> k to fieldEntryToJson(e) }
 
-private fun getTypedCombinedConfig(config: ServerConfig, type: String, upToRev: Int): Map<Int, DefinitionSnapshot> {
-    val base = DiffBinaryCache.getDecodedRev(config, 1)?.configs?.get(type) ?: emptyMap()
-    if (upToRev <= 1) return base
-    val merged = base.toMutableMap()
-    for (r in 2..upToRev) {
-        val decoded = DiffBinaryCache.getDecodedRev(config, r) ?: continue
-        val summary = decoded.manifest.configs[type] ?: continue
-        summary.removed.forEach { id -> merged.remove(id) }
-        val delta = decoded.configs[type] ?: continue
-        summary.added.forEach { id -> delta[id]?.let { merged[id] = it } }
-        summary.changed.forEach { id -> delta[id]?.let { merged[id] = it } }
-    }
-    return merged
+/** Config fileName → gameval dump group (matches DiffRoutes). */
+private fun gamevalGroupNameForConfigType(type: String): String? = when (type.lowercase()) {
+    "items" -> "items"
+    "npcs" -> "npcs"
+    "objects" -> "objects"
+    "inv" -> "inv"
+    "sequences" -> "sequences"
+    "spotanims" -> "spotanims"
+    "varp" -> "varp"
+    "varbit" -> "varbits"
+    "varclient", "varcs" -> "varcs"
+    "interfaces" -> "components"
+    else -> null
 }
+
+private fun loadIdToSearchableGamevals(config: ServerConfig, rev: Int, groupName: String): Map<Int, String> =
+    DiffBinaryCache.getDecodedRev(config, rev.coerceAtLeast(1))
+        ?.gameval
+        ?.get(groupName)
+        .orEmpty()
+        .mapValues { (_, extra) -> extra.searchable }
+
+/** Attach `gameval` onto snapshot JSON so text headers don't need a second round-trip. */
+private fun snapshotToJsonWithGameval(
+    snapshot: DefinitionSnapshot,
+    id: Int,
+    idToGameval: Map<Int, String>?,
+): Map<String, Any?> {
+    val json = snapshotToJson(snapshot).toMutableMap()
+    if (!json.containsKey("gameval")) {
+        idToGameval?.get(id)?.takeIf { it.isNotBlank() }?.let { json["gameval"] = it }
+    }
+    return json
+}
+
+private fun getTypedCombinedConfig(config: ServerConfig, type: String, upToRev: Int): Map<Int, DefinitionSnapshot> =
+    DiffBinaryCache.getTypedCombinedConfig(config, type, upToRev)
+
+/** Max entities per /cache page when offset/limit are provided. */
+private const val CACHE_PAGE_LIMIT_MAX = 500
+private const val CACHE_PAGE_LIMIT_DEFAULT = 150
 
 private fun gamevalDisplayName(groupName: String): String = when (groupName) {
     "items"     -> "Items"
@@ -99,11 +126,15 @@ fun Route.registerCacheEndpoints(config: ServerConfig) {
     EndpointRegistry.registerEndpoint(
         method = "GET",
         path = "/cache",
-        description = "Typed cache snapshots for a config type at revision (all ids or a single id).",
+        description = "Typed cache snapshots for a config type at revision (all ids, a page via offset/limit, or a single id).",
         category = "Cache",
         queryParamsClass = null,
         responseType = "application/json",
-        examples = listOf("/cache?type=items&rev=237", "/cache?type=items&id=4151&rev=237")
+        examples = listOf(
+            "/cache?type=items&rev=237",
+            "/cache?type=items&rev=237&offset=0&limit=150",
+            "/cache?type=items&id=4151&rev=237",
+        )
     )
     EndpointRegistry.registerEndpoint(
         method = "GET",
@@ -198,6 +229,11 @@ fun Route.registerCacheEndpoints(config: ServerConfig) {
 
         val rev = (call.request.queryParameters["rev"]?.toIntOrNull() ?: config.revision).coerceAtLeast(1)
         val id = call.request.queryParameters["id"]?.toIntOrNull()
+        val offsetParam = call.request.queryParameters["offset"]?.toIntOrNull()
+        val limitParam = call.request.queryParameters["limit"]?.toIntOrNull()
+        val paged = offsetParam != null || limitParam != null
+        val offset = (offsetParam ?: 0).coerceAtLeast(0)
+        val limit = (limitParam ?: CACHE_PAGE_LIMIT_DEFAULT).coerceIn(1, CACHE_PAGE_LIMIT_MAX)
 
         val decoded = DiffBinaryCache.getDecodedRev(config, rev)
         if (decoded == null) {
@@ -206,23 +242,46 @@ fun Route.registerCacheEndpoints(config: ServerConfig) {
         }
 
         val merged = getTypedCombinedConfig(config, type, rev)
+        val gamevalGroup = gamevalGroupNameForConfigType(type)
+        val idToGameval = gamevalGroup?.let { loadIdToSearchableGamevals(config, rev, it) }
         val payload: Map<String, Any?> = if (id != null) {
             val single = merged[id]
             if (single == null) {
                 call.respond(HttpStatusCode.NotFound, mapOf("error" to "No $type definition for id $id at rev $rev"))
                 return@get
             }
-            mapOf("rev" to rev, "type" to type, "id" to id, "snapshot" to snapshotToJson(single))
+            mapOf(
+                "rev" to rev,
+                "type" to type,
+                "id" to id,
+                "snapshot" to snapshotToJsonWithGameval(single, id, idToGameval),
+            )
         } else {
-            mapOf("rev" to rev, "type" to type, "count" to merged.size, "snapshots" to merged.entries.sortedBy { it.key }
-                .associate { (defId, snap) -> defId.toString() to snapshotToJson(snap) })
+            val sorted = merged.entries.sortedBy { it.key }
+            val total = sorted.size
+            val slice = if (paged) sorted.drop(offset).take(limit) else sorted
+            val snapshots = slice.associate { (defId, snap) ->
+                defId.toString() to snapshotToJsonWithGameval(snap, defId, idToGameval)
+            }
+            buildMap {
+                put("rev", rev)
+                put("type", type)
+                put("count", if (paged) slice.size else total)
+                put("total", total)
+                if (paged) {
+                    put("offset", offset)
+                    put("limit", limit)
+                    put("hasMore", offset + slice.size < total)
+                }
+                put("snapshots", snapshots)
+            }
         }
 
         val binFile = CachePathHelper.getDiffBinaryFile(config.gameType, config.environment, rev)
-        val etagSeed = if (id == null) {
-            "${binFile.lastModified()}:${binFile.length()}:$type"
-        } else {
-            "${binFile.lastModified()}:${binFile.length()}:$type:$id"
+        val etagSeed = when {
+            id != null -> "${binFile.lastModified()}:${binFile.length()}:$type:$id"
+            paged -> "${binFile.lastModified()}:${binFile.length()}:$type:page:$offset:$limit"
+            else -> "${binFile.lastModified()}:${binFile.length()}:$type"
         }
         val etag = md5HexUtf8(etagSeed)
         val inm = parseIfNoneMatch(call.request.headers[HttpHeaders.IfNoneMatch])

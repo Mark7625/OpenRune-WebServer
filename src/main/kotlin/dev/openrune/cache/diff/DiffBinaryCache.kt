@@ -14,7 +14,9 @@ private val logger = KotlinLogging.logger {}
 
 /**
  * Lazy-loading in-memory cache for decoded diff binary blobs.
- * One decoded rev per (gameType, environment, rev). No eviction (use extra memory for speed).
+ * One decoded rev per (gameType, environment, rev).
+ * Startup only warms a small subset; other revs decode on demand.
+ * Full decoded payloads are not evicted once loaded (speed over reclaim).
  */
 object DiffBinaryCache {
 
@@ -24,7 +26,15 @@ object DiffBinaryCache {
         val length: Long
     )
 
+    private data class ManifestCacheEntry(
+        val manifest: DiffManifest,
+        val lastModified: Long,
+        val length: Long
+    )
+
     private val cache = ConcurrentHashMap<String, DecodedCacheEntry>()
+    /** Lightweight manifests for revision listing — does not retain sprites/maps/configs. */
+    private val manifestCache = ConcurrentHashMap<String, ManifestCacheEntry>()
     data class DecodeStatus(
         val revision: Int,
         val status: String,
@@ -135,6 +145,7 @@ object DiffBinaryCache {
 
     private fun clearStateForKey(key: String) {
         cache.remove(key)
+        manifestCache.remove(key)
         decodeFutures.remove(key)
         decodeStatuses.remove(key)
         lastDecodeBroadcastMs.remove(key)
@@ -184,6 +195,7 @@ object DiffBinaryCache {
             if (decoded != null) {
                 updateDecodeStatus(key, rev, lastModified, length, "decoding", 90, "Caching decoded data")
                 cache[key] = DecodedCacheEntry(decoded, lastModified, length)
+                manifestCache[key] = ManifestCacheEntry(decoded.manifest, lastModified, length)
                 updateDecodeStatus(key, rev, lastModified, length, "ready", 100, "Ready")
             }
             decoded
@@ -261,6 +273,33 @@ object DiffBinaryCache {
         return runCatching { future.get() }.getOrNull()
     }
 
+    /**
+     * Returns the revision manifest without forcing a full decode into [cache].
+     * Prefer this for emptiness / listing checks. Falls back to a lightweight file peek.
+     */
+    fun peekManifest(config: ServerConfig, rev: Int): DiffManifest? {
+        val k = key(config, rev)
+        val file = CachePathHelper.getDiffBinaryFile(config.gameType, config.environment, rev)
+        if (!file.exists()) {
+            clearStateForKey(k)
+            return null
+        }
+        val lastModified = file.lastModified()
+        val length = file.length()
+        cache[k]?.let { cached ->
+            if (cached.lastModified == lastModified && cached.length == length) {
+                manifestCache[k] = ManifestCacheEntry(cached.decoded.manifest, lastModified, length)
+                return cached.decoded.manifest
+            }
+        }
+        manifestCache[k]?.let { cached ->
+            if (cached.lastModified == lastModified && cached.length == length) return cached.manifest
+        }
+        val manifest = CacheBinaryFormat.readManifestFromFile(file) ?: return null
+        manifestCache[k] = ManifestCacheEntry(manifest, lastModified, length)
+        return manifest
+    }
+
     fun getDecodeStatus(config: ServerConfig, rev: Int): DecodeStatus {
         val k = key(config, rev)
         val file = CachePathHelper.getDiffBinaryFile(config.gameType, config.environment, rev)
@@ -328,5 +367,55 @@ object DiffBinaryCache {
                 runCatching { getDecodedRev(config, rev) }
                     .onFailure { e -> logger.debug(e) { "Warm-up decode failed for rev $rev" } }
             }
+    }
+
+    private data class TypedCombinedKey(
+        val game: String,
+        val environment: String,
+        val type: String,
+        val upToRev: Int,
+    )
+
+    /** Bounded LRU of merged typed configs (avoids re-walking 1…rev on every /table|/cache|/content). */
+    private const val MAX_TYPED_COMBINED = 48
+    private val typedCombinedLock = Any()
+    private val typedCombinedCache = object : LinkedHashMap<TypedCombinedKey, Map<Int, DefinitionSnapshot>>(32, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<TypedCombinedKey, Map<Int, DefinitionSnapshot>>): Boolean =
+            size > MAX_TYPED_COMBINED
+    }
+
+    /**
+     * Merge all delta revisions from 1 through [upToRev] into a complete typed snapshot map.
+     * Result is cached per (game, env, type, rev).
+     */
+    fun getTypedCombinedConfig(config: ServerConfig, type: String, upToRev: Int): Map<Int, DefinitionSnapshot> {
+        val key = TypedCombinedKey(
+            game = config.gameType.name,
+            environment = config.environment.name,
+            type = type,
+            upToRev = upToRev,
+        )
+        synchronized(typedCombinedLock) {
+            typedCombinedCache[key]?.let { return it }
+        }
+        val base = getDecodedRev(config, 1)?.configs?.get(type) ?: emptyMap()
+        val merged: Map<Int, DefinitionSnapshot> = if (upToRev <= 1) {
+            base
+        } else {
+            val out = base.toMutableMap()
+            for (r in 2..upToRev) {
+                val decoded = getDecodedRev(config, r) ?: continue
+                val summary = decoded.manifest.configs[type] ?: continue
+                summary.removed.forEach { id -> out.remove(id) }
+                val delta = decoded.configs[type] ?: continue
+                summary.added.forEach { id -> delta[id]?.let { out[id] = it } }
+                summary.changed.forEach { id -> delta[id]?.let { out[id] = it } }
+            }
+            out
+        }
+        synchronized(typedCombinedLock) {
+            typedCombinedCache[key] = merged
+        }
+        return merged
     }
 }

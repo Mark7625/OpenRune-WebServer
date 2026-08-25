@@ -277,7 +277,12 @@ object CacheBinaryFormat {
     }
 
 
-    fun decode(bytes: ByteArray): DecodedRev {
+    private data class HeaderAndBody(
+        val revision: Int,
+        val bodyBytes: ByteArray,
+    )
+
+    private fun decompressBody(bytes: ByteArray): HeaderAndBody {
         val bb = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN)
         val magic = ByteArray(4); bb.get(magic)
         if (String(magic, Charsets.UTF_8) != MAGIC) throw IllegalArgumentException("Invalid ORCA magic")
@@ -285,13 +290,19 @@ object CacheBinaryFormat {
         val uncompressedSize = bb.int
         val compressed = ByteArray(bb.remaining()); bb.get(compressed)
         val bodyBytes = Zstd.decompress(compressed, uncompressedSize)
-        val input = ByteArrayInputStream(bodyBytes)
+        return HeaderAndBody(revision, bodyBytes)
+    }
 
-        // Schema
+    private data class SchemaAndManifest(
+        val configTypes: List<String>,
+        val gamevalGroups: List<String>,
+        val manifest: DiffManifest,
+    )
+
+    private fun readSchemaAndManifest(input: ByteArrayInputStream): SchemaAndManifest {
         val configTypes = List(readVarint(input)) { readString(input) }
         val gamevalGroups = List(readVarint(input)) { readString(input) }
 
-        // Manifest
         val manifestRev = readVarint(input)
         val spriteAdded = readIntList(input)
         val spriteRemoved = readIntList(input)
@@ -310,6 +321,36 @@ object CacheBinaryFormat {
             configs = configSummaries,
             gamevals = gamevalSummaries,
         )
+        return SchemaAndManifest(configTypes, gamevalGroups, manifest)
+    }
+
+    /**
+     * Decompresses the ORCA body and returns only the manifest (schema + summaries).
+     * Used for revision listing / emptiness checks without retaining full decoded payloads.
+     */
+    fun readManifestFromBytes(bytes: ByteArray): DiffManifest {
+        val (_, bodyBytes) = decompressBody(bytes)
+        val input = ByteArrayInputStream(bodyBytes)
+        return readSchemaAndManifest(input).manifest
+    }
+
+    fun readManifestFromFile(file: File): DiffManifest? {
+        if (!file.exists()) return null
+        return try {
+            readManifestFromBytes(file.readBytes())
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    fun decode(bytes: ByteArray): DecodedRev {
+        val header = decompressBody(bytes)
+        val revision = header.revision
+        val input = ByteArrayInputStream(header.bodyBytes)
+        val schema = readSchemaAndManifest(input)
+        val configTypes = schema.configTypes
+        val gamevalGroups = schema.gamevalGroups
+        val manifest = schema.manifest
 
         // Configs
         val configs = HashMap<String, Map<Int, DefinitionSnapshot>>()

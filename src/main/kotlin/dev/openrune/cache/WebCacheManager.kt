@@ -71,13 +71,22 @@ class WebCacheManager(
             return@withContext
         }
 
+        // Keep idle RAM bounded: only warm base + a few newest revs. Other revs decode on demand
+        // (HTTP 202 + /diff/decode/status + SSE DECODE_PROGRESS).
+        val preloadNewest = System.getenv("OPENRUNE_DIFF_PRELOAD_NEWEST")?.toIntOrNull()?.coerceIn(0, 32) ?: 3
+        val newest = availableRevs
+            .asSequence()
+            .filter { it != 1 }
+            .sortedDescending()
+            .take(preloadNewest)
+            .toList()
         val ordered = buildList {
             if (1 in availableRevs) add(WarmupStep(1, "base"))
-            if (config.revision in availableRevs && config.revision != 1) add(WarmupStep(config.revision, "server"))
-            availableRevs
-                .filterNot { it == 1 || it == config.revision }
-                .sorted()
-                .forEach { add(WarmupStep(it, "rev")) }
+            newest.forEach { add(WarmupStep(it, "recent")) }
+        }
+        logger.info {
+            "Diff warmup selected ${ordered.size}/${availableRevs.size} revs " +
+                "(base + newest $preloadNewest): ${ordered.map { it.rev }}"
         }
 
         val total = ordered.size.coerceAtLeast(1)
@@ -91,7 +100,7 @@ class WebCacheManager(
             DiffBinaryCache.getDecodedRev(config, step.rev)
         }
 
-        emitUpdating(true, 100.0, "Diff decode warmup complete")
+        emitUpdating(true, 100.0, "Diff decode warmup complete (${ordered.size} of ${availableRevs.size} revs)")
         emitUpdating(false, null, null)
     }
 
@@ -110,6 +119,7 @@ class WebCacheManager(
         val dumper = DiffDumper(
             gameType = config.gameType,
             environment = config.environment,
+            spriteCdn = config.spriteCdn,
             onProgress = { msg ->
                 val pct = Regex("(\\d{1,3})%").find(msg)?.groupValues?.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 100)
                 phaseProgress = if (pct != null) {
