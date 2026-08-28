@@ -2,6 +2,8 @@ package dev.openrune
 
 import dev.openrune.cache.CachePathHelper
 import dev.openrune.cache.diff.CacheBinaryFormat
+import dev.openrune.cache.diff.ConfigDiffType
+import dev.openrune.cache.diff.DefinitionSnapshot
 import dev.openrune.cache.diff.SpriteCdn
 import dev.openrune.cache.diff.SpriteCdnPublishException
 import dev.openrune.cache.tools.CacheEnvironment
@@ -124,7 +126,15 @@ fun main(args: Array<String>) {
         kotlin.system.exitProcess(1)
     }
 
-    logger.info { "Base rev $effectiveBaseRev: ${merged.size} sprites with PNG payloads" }
+    // Textures are published as a zip only; each texture points at a sprite id via `fileId`.
+    val texturesType = ConfigDiffType.TEXTURES.fileName
+    val mergedTextures = LinkedHashMap<Int, DefinitionSnapshot>()
+    baseDecoded.configs[texturesType]?.forEach { (id, snapshot) -> mergedTextures[id] = snapshot }
+
+    logger.info {
+        "Base rev $effectiveBaseRev: ${merged.size} sprites with PNG payloads, " +
+            "${mergedTextures.size} textures"
+    }
 
     // Publish only revs in [from,to]; still walk every bin up to [to] so merged stays correct.
     val applyThrough = bins.map { it.first }.toSet()
@@ -133,6 +143,26 @@ fun main(args: Array<String>) {
     var skipped = 0
     var failed = 0
     var repairedPngs = 0
+    var texturesPublished = 0
+
+    fun publishTextures(rev: Int, sprites: Map<Int, ByteArray>) {
+        val textures = SpriteCdn.textureBytes(mapOf(texturesType to mergedTextures.toMap()), sprites)
+        if (textures.isEmpty()) {
+            logger.warn { "rev $rev: no texture PNGs resolved — skipping textures.zip" }
+            return
+        }
+        if (dryRun) {
+            logger.info { "dryRun: would upload rev $rev textures.zip (${textures.size} pngs)" }
+            return
+        }
+        val ok = runCatching {
+            SpriteCdn.publishRevisionTextures(cdn, gameType, rev, textures) { msg -> logger.info { msg } }
+        }.getOrElse { e ->
+            logger.error(e) { "textures.zip upload failed for rev $rev" }
+            false
+        }
+        if (ok) texturesPublished++
+    }
 
     fun publish(rev: Int, sprites: Map<Int, ByteArray>, reason: String) {
         if (sprites.isEmpty()) {
@@ -156,6 +186,7 @@ fun main(args: Array<String>) {
             } else {
                 logger.info { "dryRun: would upload rev $rev (${sprites.size} pngs) — $reason" }
             }
+            publishTextures(rev, sprites)
             published++
             return
         }
@@ -190,6 +221,7 @@ fun main(args: Array<String>) {
             failed++
             logger.error(e) { "Upload failed for rev $rev" }
         }
+        publishTextures(rev, sprites)
     }
 
     // Apply deltas in order so [merged] stays a full snapshot; only publish when rev is in range.
@@ -235,6 +267,17 @@ fun main(args: Array<String>) {
             }
         }
 
+        // Keep the texture config snapshot current even for revs we do not publish.
+        decoded.manifest.configs[texturesType]?.let { textureSummary ->
+            textureSummary.removed.forEach { mergedTextures.remove(it) }
+            val delta = decoded.configs[texturesType]
+            if (delta != null) {
+                (textureSummary.added + textureSummary.changed).forEach { id ->
+                    delta[id]?.let { mergedTextures[id] = it }
+                }
+            }
+        }
+
         if (rev !in applyThrough) continue
 
         val unchanged = deltaIds.isEmpty() && summary.removed.isEmpty()
@@ -262,6 +305,7 @@ fun main(args: Array<String>) {
 
     logger.info {
         "Done. published=$published skipped=$skipped failed=$failed " +
+            "texturesZipsUploaded=$texturesPublished " +
             "pngsUploadedThisRun=$repairedPngs finalMergedSprites=${merged.size} " +
             "payloadsApplied=$appliedPayloads dryRun=$dryRun repair=$repair"
     }

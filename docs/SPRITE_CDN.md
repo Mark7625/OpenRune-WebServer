@@ -7,7 +7,10 @@ Dump uploads PNGs + a zip whenever a revision is dumped.
 ```
 {osrs|rs3}/rev/{rev}/sprites/{id}.png
 {osrs|rs3}/rev/{rev}/sprites.zip
+{osrs|rs3}/rev/{rev}/textures.zip
 ```
+
+`textures.zip` holds `{textureId}.png` — each texture's `fileId` resolved against that revision's sprites. Zip only; textures have no per-id CDN objects.
 
 ## Server env
 

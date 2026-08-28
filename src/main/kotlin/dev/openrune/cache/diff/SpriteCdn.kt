@@ -62,6 +62,32 @@ object SpriteCdn {
     fun spritesPrefix(game: GameType, rev: Int): String =
         "${game.cdnSlug()}/rev/$rev/sprites/"
 
+    fun texturesZipObjectKey(game: GameType, rev: Int): String =
+        "${game.cdnSlug()}/rev/$rev/textures.zip"
+
+    fun publicTexturesZipUrl(cdn: SpriteCdnConfig, game: GameType, rev: Int): String? {
+        val base = cdn.baseUrl?.trimEnd('/') ?: return null
+        return "$base/${texturesZipObjectKey(game, rev)}"
+    }
+
+    /**
+     * Resolve texture id -> PNG bytes by following each texture's `fileId` into [sprites].
+     * Textures whose sprite is missing are dropped.
+     */
+    fun textureBytes(
+        configs: Map<String, Map<Int, DefinitionSnapshot>>,
+        sprites: Map<Int, ByteArray>,
+    ): Map<Int, ByteArray> {
+        val textures = configs[ConfigDiffType.TEXTURES.fileName] ?: return emptyMap()
+        val out = LinkedHashMap<Int, ByteArray>(textures.size)
+        for (textureId in textures.keys.sorted()) {
+            val fileId = textures[textureId]?.get("fileId")?.value as? Int ?: continue
+            val bytes = sprites[fileId] ?: continue
+            out[textureId] = bytes
+        }
+        return out
+    }
+
     fun publicSpriteUrl(cdn: SpriteCdnConfig, game: GameType, rev: Int, id: Int): String? {
         val base = cdn.baseUrl?.trimEnd('/') ?: return null
         return "$base/${spriteObjectKey(game, rev, id)}"
@@ -94,8 +120,8 @@ object SpriteCdn {
             return SpritePublishResult(rev, 0, 0, 0, emptyList(), zipUploaded = false)
         }
 
-        val zipBytes = buildSpritesZip(sprites)
-        val localZip = localZipFile(game, rev)
+        val zipBytes = buildPngZip(sprites)
+        val localZip = localZipFile(game, rev, "sprites")
         runCatching {
             localZip.parentFile?.mkdirs()
             localZip.writeBytes(zipBytes)
@@ -228,6 +254,65 @@ object SpriteCdn {
         }
     }
 
+    /**
+     * Write a local `textures.zip` mirror and upload it to `{osrs|rs3}/rev/{rev}/textures.zip`.
+     *
+     * [textures] maps texture id -> PNG bytes (the sprite the texture points at via `fileId`).
+     * Only the zip is published — textures have no per-id CDN objects.
+     *
+     * Returns true when the zip reached the CDN; false when upload is disabled or failed after retries.
+     */
+    fun publishRevisionTextures(
+        cdn: SpriteCdnConfig,
+        game: GameType,
+        rev: Int,
+        textures: Map<Int, ByteArray>,
+        maxAttempts: Int = DEFAULT_MAX_ATTEMPTS,
+        onProgress: (String) -> Unit = {},
+    ): Boolean {
+        if (textures.isEmpty()) {
+            onProgress("CDN: no textures to publish for rev $rev")
+            return false
+        }
+
+        val zipBytes = buildPngZip(textures)
+        val localZip = localZipFile(game, rev, "textures")
+        runCatching {
+            localZip.parentFile?.mkdirs()
+            localZip.writeBytes(zipBytes)
+            onProgress("CDN: wrote local zip ${localZip.name} (${textures.size} pngs)")
+        }.onFailure { e -> logger.warn(e) { "Failed writing local textures zip" } }
+
+        if (!cdn.canUpload) {
+            onProgress("CDN: textures upload skipped (set OPENRUNE_CDN_BUCKET to enable)")
+            return false
+        }
+
+        val client = s3Client(cdn)
+        try {
+            onProgress("CDN: uploading textures.zip for rev $rev (${textures.size} pngs)…")
+            val ok = putObjectWithRetry(
+                client = client,
+                bucket = cdn.bucket!!,
+                key = texturesZipObjectKey(game, rev),
+                bytes = zipBytes,
+                contentType = "application/zip",
+                cacheControl = "public, max-age=86400",
+                maxAttempts = maxAttempts,
+            )
+            if (ok) {
+                onProgress("CDN: uploaded textures.zip for rev $rev (${textures.size} pngs)")
+            } else {
+                val msg = "CDN: rev $rev textures.zip upload failed after retries"
+                onProgress(msg)
+                logger.error { msg }
+            }
+            return ok
+        } finally {
+            runCatching { client.close() }
+        }
+    }
+
     fun listUploadedSpriteIds(client: S3Client, bucket: String, game: GameType, rev: Int): Set<Int> {
         val prefix = spritesPrefix(game, rev)
         val ids = HashSet<Int>(4096)
@@ -348,11 +433,11 @@ object SpriteCdn {
         return false
     }
 
-    private fun buildSpritesZip(sprites: Map<Int, ByteArray>): ByteArray {
+    private fun buildPngZip(pngs: Map<Int, ByteArray>): ByteArray {
         val baos = ByteArrayOutputStream()
         ZipOutputStream(baos).use { zos ->
-            for (id in sprites.keys.sorted()) {
-                val bytes = sprites[id] ?: continue
+            for (id in pngs.keys.sorted()) {
+                val bytes = pngs[id] ?: continue
                 zos.putNextEntry(ZipEntry("$id.png"))
                 zos.write(bytes)
                 zos.closeEntry()
@@ -361,9 +446,9 @@ object SpriteCdn {
         return baos.toByteArray()
     }
 
-    private fun localZipFile(game: GameType, rev: Int): File {
+    private fun localZipFile(game: GameType, rev: Int, kind: String): File {
         val root = File("cache", "${game.name.lowercase()}/cdn")
-        return File(root, "${game.cdnSlug()}-rev-$rev-sprites.zip")
+        return File(root, "${game.cdnSlug()}-rev-$rev-$kind.zip")
     }
 
     fun s3Client(cdn: SpriteCdnConfig): S3Client {

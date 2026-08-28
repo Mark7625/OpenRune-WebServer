@@ -685,6 +685,10 @@ class DiffDumper(
             SpriteCdn.publishRevisionSprites(spriteCdn, gameType, 1, spriteBytes) { msg ->
                 progress(98, msg)
             }
+            progress(99, "Publishing textures CDN")
+            SpriteCdn.publishRevisionTextures(spriteCdn, gameType, 1, SpriteCdn.textureBytes(configs, spriteBytes)) { msg ->
+                progress(99, msg)
+            }
             val ms = (System.nanoTime() - t0) / 1_000_000.0
             progress(100, "Done -> ${binFile.name} (${ms.toLong()}ms)")
         }
@@ -801,6 +805,15 @@ class DiffDumper(
             progress(99, "Publishing sprites CDN")
             // Upload the full live set for this rev so CDN paths are self-contained.
             SpriteCdn.publishRevisionSprites(spriteCdn, gameType, rev, currentSprites) { msg ->
+                progress(99, msg)
+            }
+            progress(99, "Publishing textures CDN")
+            SpriteCdn.publishRevisionTextures(
+                spriteCdn,
+                gameType,
+                rev,
+                SpriteCdn.textureBytes(currentConfigs, currentSprites),
+            ) { msg ->
                 progress(99, msg)
             }
             val ms = (System.nanoTime() - t0) / 1_000_000.0

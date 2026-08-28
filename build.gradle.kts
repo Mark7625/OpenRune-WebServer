@@ -23,7 +23,7 @@ dependencies {
     implementation("io.ktor:ktor-server-cors:2.3.5")
     implementation("io.ktor:ktor-serialization-gson:2.3.5")
     implementation("io.ktor:ktor-server-status-pages:2.3.5")
-    implementation("dev.or2:all:2.4.14")
+    implementation("dev.or2:all:2.4.16")
     implementation("cc.ekblad:4koma:1.2.2-openrune")
 
     // JSON serialization with Gson
@@ -102,8 +102,8 @@ tasks {
     }
 
     registerBootTask("bootRunescape",    -1,   "RUNESCAPE3", "LIVE")
-    registerBootTask("bootOldschool",    2644, "OLDSCHOOL",   "LIVE")
-    registerBootTaskDev("bootOldschoolDev", 2644,   "OLDSCHOOL",   "DEV")
+    registerBootTask("bootOldschool",    2649, "OLDSCHOOL",   "LIVE")
+    registerBootTaskDev("bootOldschoolDev", 2649,   "OLDSCHOOL",   "DEV")
     registerBootTask("bootSailing",      -1,   "OLDSCHOOL",   "BETA")
 
     register<JavaExec>("runDownloadAllCaches") {
