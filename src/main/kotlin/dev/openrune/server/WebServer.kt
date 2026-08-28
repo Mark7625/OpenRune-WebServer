@@ -10,6 +10,8 @@ import dev.openrune.server.endpoints.diff.getRevisionsWithData
 import dev.openrune.server.endpoints.diff.registerDiffEndpoints
 import dev.openrune.server.endpoints.cache.registerCacheEndpoints
 import dev.openrune.server.endpoints.maps.registerMapEndpoints
+import dev.openrune.server.endpoints.models.registerModelEndpoints
+import dev.openrune.server.endpoints.textures.registerTextureEndpoints
 import dev.openrune.server.zip.ZipService
 import dev.openrune.server.zip.registerZipEndpoints
 import dev.openrune.util.json
@@ -400,6 +402,8 @@ class WebServer(
                 registerDiffEndpoints(config)
                 registerCacheEndpoints(config)
                 registerMapEndpoints(config)
+                registerModelEndpoints(config)
+                registerTextureEndpoints(config)
                 registerZipEndpoints(zipService)
             }
         }

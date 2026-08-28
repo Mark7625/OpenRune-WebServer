@@ -418,4 +418,47 @@ object DiffBinaryCache {
         }
         return merged
     }
+
+    private data class CombinedModelsKey(
+        val game: String,
+        val environment: String,
+        val upToRev: Int,
+    )
+
+    private const val MAX_COMBINED_MODELS = 8
+    private val combinedModelsLock = Any()
+    private val combinedModelsCache = object : LinkedHashMap<CombinedModelsKey, Map<Int, ModelMeta>>(16, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<CombinedModelsKey, Map<Int, ModelMeta>>): Boolean =
+            size > MAX_COMBINED_MODELS
+    }
+
+    /**
+     * Merge model metadata from rev 1 through [upToRev] into the complete set for that revision.
+     * Result is cached per (game, env, rev).
+     */
+    fun getCombinedModels(config: ServerConfig, upToRev: Int): Map<Int, ModelMeta> {
+        val key = CombinedModelsKey(config.gameType.name, config.environment.name, upToRev)
+        synchronized(combinedModelsLock) {
+            combinedModelsCache[key]?.let { return it }
+        }
+        val base = getDecodedRev(config, 1)?.models ?: emptyMap()
+        val merged: Map<Int, ModelMeta> = if (upToRev <= 1) {
+            base
+        } else {
+            val out = base.toMutableMap()
+            for (r in 2..upToRev) {
+                val decoded = getDecodedRev(config, r) ?: continue
+                val summary = decoded.modelSummary
+                summary.removed.forEach { out.remove(it) }
+                val delta = decoded.models
+                if (delta.isEmpty()) continue
+                (summary.added + summary.changed).forEach { id -> delta[id]?.let { out[id] = it } }
+            }
+            out
+        }
+        synchronized(combinedModelsLock) {
+            combinedModelsCache[key] = merged
+        }
+        return merged
+    }
 }

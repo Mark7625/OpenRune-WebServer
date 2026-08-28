@@ -8,9 +8,12 @@ Dump uploads PNGs + a zip whenever a revision is dumped.
 {osrs|rs3}/rev/{rev}/sprites/{id}.png
 {osrs|rs3}/rev/{rev}/sprites.zip
 {osrs|rs3}/rev/{rev}/textures.zip
+{osrs|rs3}/rev/{rev}/models/{id}.dat
 ```
 
 `textures.zip` holds `{textureId}.png` — each texture's `fileId` resolved against that revision's sprites. Zip only; textures have no per-id CDN objects.
+
+`models/{id}.dat` is the raw mesh straight out of index 7, a full set per revision. Model *metadata* is not on the CDN — it lives in the revision `.bin` (`MDLM` trailer) and is served by `/models`; see [MODELS.md](MODELS.md).
 
 ## Server env
 

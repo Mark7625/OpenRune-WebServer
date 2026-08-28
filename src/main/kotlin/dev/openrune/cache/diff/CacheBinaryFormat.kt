@@ -7,6 +7,9 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 
 /**
@@ -39,6 +42,7 @@ object CacheBinaryFormat {
     private const val TRAILER_OPENRS2_ID = "OCID"
     private const val TRAILER_INTERFACE_MANIFEST = "IFMF"
     private const val TRAILER_CLIENT_SCRIPTS = "CSRB"
+    private const val TRAILER_MODEL_META = "MDLM"
 
     private val gson = Gson()
 
@@ -75,7 +79,12 @@ object CacheBinaryFormat {
         val xteasByRegion: Map<Int, IntArray> = emptyMap(),
         val interfaceManifest: List<InterfaceManifestEntry> = emptyList(),
         val clientScripts: Map<Int, ByteArray> = emptyMap(),
+        /** Model metadata delta for this revision; mesh bytes live on the CDN. */
+        val models: Map<Int, ModelMeta> = emptyMap(),
+        val modelSummary: ConfigDiffSummary = EMPTY_SUMMARY,
     )
+
+    val EMPTY_SUMMARY = ConfigDiffSummary(emptyList(), emptyList(), emptyList())
 
     fun encode(
         revision: Int,
@@ -90,6 +99,8 @@ object CacheBinaryFormat {
         xteasByRegion: Map<Int, IntArray> = emptyMap(),
         interfaceManifest: List<InterfaceManifestEntry> = emptyList(),
         clientScripts: Map<Int, ByteArray> = emptyMap(),
+        models: Map<Int, ModelMeta> = emptyMap(),
+        modelSummary: ConfigDiffSummary = EMPTY_SUMMARY,
     ): ByteArray {
         val body = ByteArrayOutputStream()
         val configTypes = ConfigDiffType.diffTypeNames
@@ -267,6 +278,14 @@ object CacheBinaryFormat {
             body.write(raw)
         }
 
+        if (models.isNotEmpty() || !modelSummary.isEmpty) {
+            body.write(TRAILER_MODEL_META.toByteArray(Charsets.UTF_8))
+            writeIntList(body, modelSummary.added)
+            writeIntList(body, modelSummary.removed)
+            writeIntList(body, modelSummary.changed)
+            writeString(body, if (models.isEmpty()) "" else ModelJson.encode(models))
+        }
+
         val bodyBytes = body.toByteArray()
         val compressed = Zstd.compress(bodyBytes)
         val header = ByteBuffer.allocate(4 + 4 + 4).order(ByteOrder.LITTLE_ENDIAN)
@@ -440,6 +459,8 @@ object CacheBinaryFormat {
         val spriteMetadata = HashMap<Int, List<IndexedSpriteMeta>>()
         val interfaceManifest = ArrayList<InterfaceManifestEntry>()
         val clientScripts = HashMap<Int, ByteArray>()
+        val models = HashMap<Int, ModelMeta>()
+        var modelSummary = EMPTY_SUMMARY
         var openRs2CacheId: Long? = null
         if (input.available() > 0) {
             val trailer = readBytes(input, input.available())
@@ -546,6 +567,15 @@ object CacheBinaryFormat {
                             clientScripts[scriptId] = readBytes(trailerInput, len)
                         }
                     }
+                    TRAILER_MODEL_META -> {
+                        parsedWithMarkers = true
+                        modelSummary = ConfigDiffSummary(
+                            readIntList(trailerInput),
+                            readIntList(trailerInput),
+                            readIntList(trailerInput),
+                        )
+                        models.putAll(ModelJson.decode(readString(trailerInput)))
+                    }
                     else -> {
                         // Backward compatibility: old binaries had an optional raw 8-byte OpenRS2 id trailer.
                         if (!parsedWithMarkers && trailer.size >= 8) {
@@ -575,6 +605,8 @@ object CacheBinaryFormat {
             xteasByRegion = xteasByRegion,
             interfaceManifest = interfaceManifest,
             clientScripts = clientScripts,
+            models = models,
+            modelSummary = modelSummary,
         )
     }
 
@@ -592,24 +624,42 @@ object CacheBinaryFormat {
         xteasByRegion: Map<Int, IntArray> = emptyMap(),
         interfaceManifest: List<InterfaceManifestEntry> = emptyList(),
         clientScripts: Map<Int, ByteArray> = emptyMap(),
+        models: Map<Int, ModelMeta> = emptyMap(),
+        modelSummary: ConfigDiffSummary = EMPTY_SUMMARY,
     ) {
         file.parentFile?.mkdirs()
-        file.writeBytes(
-            encode(
-                revision,
-                openRs2CacheId,
-                manifest,
-                configs,
-                gameval,
-                sprites,
-                spriteMetadata,
-                mapObjects,
-                mapRegions,
-                xteasByRegion,
-                interfaceManifest,
-                clientScripts,
-            )
+        val bytes = encode(
+            revision,
+            openRs2CacheId,
+            manifest,
+            configs,
+            gameval,
+            sprites,
+            spriteMetadata,
+            mapObjects,
+            mapRegions,
+            xteasByRegion,
+            interfaceManifest,
+            clientScripts,
+            models,
+            modelSummary,
         )
+        // Write beside the target then move into place: a server reading this revision must never
+        // observe a half-written bin (it would decode as null and look like a missing revision).
+        val temp = File(file.parentFile, "${file.name}.tmp")
+        temp.writeBytes(bytes)
+        try {
+            Files.move(
+                temp.toPath(),
+                file.toPath(),
+                StandardCopyOption.REPLACE_EXISTING,
+                StandardCopyOption.ATOMIC_MOVE,
+            )
+        } catch (_: AtomicMoveNotSupportedException) {
+            Files.move(temp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+        } finally {
+            runCatching { temp.delete() }
+        }
     }
 
     fun readFromFile(file: File): DecodedRev? {

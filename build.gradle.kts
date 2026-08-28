@@ -151,6 +151,68 @@ tasks {
             args = project.property("cdnArgs").toString().split(Regex("\\s+")).filter { it.isNotBlank() }
         }
     }
+
+    /**
+     * Model migration entrypoint. [defaults] are applied first, then overridden by any
+     * -Pcdn* property on the command line, so every task below stays tweakable.
+     */
+    fun registerModelTask(
+        name: String,
+        taskDescription: String,
+        defaults: Map<String, String> = emptyMap(),
+    ) {
+        register<JavaExec>(name) {
+            group = "cdn"
+            description = taskDescription
+            mainClass.set("dev.openrune.MigrateModelsToCdnMainKt")
+            classpath = sourceSets["main"].runtimeClasspath
+            jvmArgs("-Xmx8G")
+            // Prefer working dir = project root so cache/ + .env resolve.
+            workingDir = rootProject.projectDir
+
+            val passProps = listOf(
+                "cdnGame",
+                "cdnEnv",
+                "cdnFrom",
+                "cdnTo",
+                "cdnDryRun",
+                "cdnSkipCdn",
+                "cdnSkipBin",
+                "cdnForce",
+                "cdnSkipTextures",
+            )
+            defaults.forEach { (key, value) -> systemProperty(key, value) }
+            for (key in passProps) {
+                if (project.hasProperty(key)) {
+                    systemProperty(key, project.property(key).toString())
+                }
+            }
+            if (project.hasProperty("cdnArgs")) {
+                args = project.property("cdnArgs").toString().split(Regex("\\s+")).filter { it.isNotBlank() }
+            }
+        }
+    }
+
+    registerModelTask(
+        "migrateModelsToCdn",
+        "Upload model .dat files to S3/R2 CDN and write model metadata into the revision bins. " +
+            "Props: -PcdnFrom=1 -PcdnTo=500 -PcdnDryRun=true -PcdnSkipCdn=true -PcdnSkipBin=true -PcdnForce=true",
+    )
+
+    registerModelTask(
+        "migrate240",
+        "Rev 240 models + textures: uploads model .dat files and textures.zip, and writes model " +
+            "metadata into 240.bin. Everything else in the bin is left as-is. " +
+            "Override the rev with -PcdnFrom/-PcdnTo.",
+        defaults = mapOf("cdnFrom" to "240", "cdnTo" to "240"),
+    )
+
+    registerModelTask(
+        "uploadModelsToCdn",
+        "Upload model .dat files to S3/R2 CDN only - no .bin is rewritten, no textures.zip. " +
+            "Props: -PcdnFrom=240 -PcdnTo=240 -PcdnDryRun=true",
+        defaults = mapOf("cdnSkipBin" to "true", "cdnSkipTextures" to "true"),
+    )
 }
 
 

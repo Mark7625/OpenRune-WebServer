@@ -322,6 +322,11 @@ fun Route.registerCacheEndpoints(config: ServerConfig) {
                 "displayName" to navDisplayNameFor("gamevals", "Gamevals", navOverrides),
                 "minRevision" to archiveMinRev,
             ),
+            mapOf(
+                "id" to "models",
+                "label" to "Models",
+                "displayName" to navDisplayNameFor("models", "Models", navOverrides),
+            ),
         ) + typeArchives
         val configs = ConfigDiffType.allConfigs
             .map { t ->

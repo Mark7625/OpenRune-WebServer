@@ -393,7 +393,7 @@ object SpriteCdn {
         }
     }
 
-    private fun putObjectWithRetry(
+    internal fun putObjectWithRetry(
         client: S3Client,
         bucket: String,
         key: String,

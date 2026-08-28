@@ -4,6 +4,7 @@ import dev.openrune.OsrsCacheProvider
 import dev.openrune.ServerConfig
 import dev.openrune.SpriteCdnConfig
 import dev.openrune.cache.CLIENTSCRIPT
+import dev.openrune.cache.MODELS
 import dev.openrune.cache.CacheDownloader
 import dev.openrune.cache.CachePathHelper
 import dev.openrune.cache.ChecksumManifestManager
@@ -581,6 +582,8 @@ class DiffDumper(
         xteasByRegion: Map<Int, IntArray>,
         interfaceManifest: List<InterfaceManifestEntry>,
         clientScripts: Map<Int, ByteArray>,
+        models: Map<Int, ModelMeta>,
+        modelSummary: ConfigDiffSummary,
     ): File {
         val binFile = CachePathHelper.getDiffBinaryFile(gameType, environment, rev)
         CacheBinaryFormat.writeToFile(
@@ -590,6 +593,8 @@ class DiffDumper(
             xteasByRegion = xteasByRegion,
             interfaceManifest = interfaceManifest,
             clientScripts = clientScripts,
+            models = models,
+            modelSummary = modelSummary,
         )
         return binFile
     }
@@ -647,6 +652,24 @@ class DiffDumper(
             val interfaceManifest = buildInterfaceManifest(decodedConfigs.interfaceTypes, gamevalData)
             progress(60, "Configs decoded")
 
+            progress(62, "Decoding models")
+            val modelIds = ModelExtractor.modelIds(cache)
+            val modelMeta = ModelExtractor.loadOrExtract(
+                cache = cache,
+                gameType = gameType,
+                environment = environment,
+                rev = 1,
+                attachments = {
+                    ModelExtractor.attachmentsFrom(
+                        decodedConfigs.itemTypes,
+                        decodedConfigs.npcTypes,
+                        decodedConfigs.objectTypes,
+                    )
+                },
+                ids = modelIds,
+            ) { msg -> progress(64, msg) }
+            val modelSummary = ConfigDiffSummary(modelMeta.keys.sorted(), emptyList(), emptyList())
+
             val gameval = buildGamevalExtras(gamevalData)
             val clientScripts = readClientScripts(cache)
             val configSummaries = ConfigDiffType.diffTypeNames.associateWith { type ->
@@ -680,6 +703,8 @@ class DiffDumper(
                 xteasByRegion,
                 interfaceManifest,
                 clientScripts,
+                modelMeta,
+                modelSummary,
             )
             progress(98, "Publishing sprites CDN")
             SpriteCdn.publishRevisionSprites(spriteCdn, gameType, 1, spriteBytes) { msg ->
@@ -689,6 +714,14 @@ class DiffDumper(
             SpriteCdn.publishRevisionTextures(spriteCdn, gameType, 1, SpriteCdn.textureBytes(configs, spriteBytes)) { msg ->
                 progress(99, msg)
             }
+            progress(99, "Publishing models CDN")
+            ModelCdn.publishRevisionModels(
+                cdn = spriteCdn,
+                game = gameType,
+                rev = 1,
+                ids = modelIds,
+                dataFor = { id -> cache.data(MODELS, id) },
+            ) { msg -> progress(99, msg) }
             val ms = (System.nanoTime() - t0) / 1_000_000.0
             progress(100, "Done -> ${binFile.name} (${ms.toLong()}ms)")
         }
@@ -759,6 +792,23 @@ class DiffDumper(
             val currentConfigs = buildTypedConfigs(decoded, gamevalData)
             val interfaceManifest = buildInterfaceManifest(decoded.interfaceTypes, gamevalData)
             val clientScripts = readClientScripts(cache)
+
+            progress(68, "Decoding models")
+            val modelIds = ModelExtractor.modelIds(cache)
+            val currentModels = ModelExtractor.loadOrExtract(
+                cache = cache,
+                gameType = gameType,
+                environment = environment,
+                rev = rev,
+                attachments = {
+                    ModelExtractor.attachmentsFrom(decoded.itemTypes, decoded.npcTypes, decoded.objectTypes)
+                },
+                ids = modelIds,
+                showProgressBar = barUpdater == null,
+            ) { msg -> progress(70, msg) }
+            val modelSummary = ModelExtractor.diff(baseDecoded.models, currentModels)
+            val modelDeltaIds = (modelSummary.added + modelSummary.changed).toSet()
+            val deltaModels = currentModels.filterKeys { it in modelDeltaIds }
             progress(72, "Building delta")
 
             val baseConfigs = baseDecoded.configs
@@ -801,6 +851,8 @@ class DiffDumper(
                 xteasByRegion,
                 interfaceManifest,
                 clientScripts,
+                deltaModels,
+                modelSummary,
             )
             progress(99, "Publishing sprites CDN")
             // Upload the full live set for this rev so CDN paths are self-contained.
@@ -816,6 +868,15 @@ class DiffDumper(
             ) { msg ->
                 progress(99, msg)
             }
+            progress(99, "Publishing models CDN")
+            // Upload the full live set for this rev so CDN paths are self-contained.
+            ModelCdn.publishRevisionModels(
+                cdn = spriteCdn,
+                game = gameType,
+                rev = rev,
+                ids = modelIds,
+                dataFor = { id -> cache.data(MODELS, id) },
+            ) { msg -> progress(99, msg) }
             val ms = (System.nanoTime() - t0) / 1_000_000.0
             if (barUpdater == null) onProgress(
                 "Rev $rev: done -> ${binFile.name} " +

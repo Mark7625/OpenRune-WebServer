@@ -48,6 +48,15 @@ private val TABLE_QUERY_LOGS_ENABLED: Boolean =
     System.getProperty("openrune.table.logs")?.equals("true", ignoreCase = true) == true
 private const val CONFIG_TABLE_SEARCH_CACHE_VERSION = "v2"
 
+/**
+ * Payload shape version for `/diff/config/{type}/table`.
+ *
+ * The row `hash` is built from ids and paging only, so a change to which *fields* a row carries
+ * leaves it identical and clients keep serving their cached copy off the ETag. Bump this whenever
+ * [slimTableFields] or the row builder changes what a row contains.
+ */
+private const val CONFIG_TABLE_PAYLOAD_VERSION = "v2"
+
 private val DIFF_CONFIG_TYPES = ConfigDiffType.diffTypeNames
 /** Maps frontend sectionId → backend fileName for types where they differ (e.g. "spotanim" → "spotanims"). */
 private val SECTION_ID_TO_FILE_NAME: Map<String, String> = ConfigDiffType.all
@@ -565,6 +574,14 @@ private fun diffBinaryRevisionsSet(config: ServerConfig): Set<Int> =
 private fun getTypedCombinedConfig(config: ServerConfig, type: String, upToRev: Int): Map<Int, DefinitionSnapshot> =
     DiffBinaryCache.getTypedCombinedConfig(config, type, upToRev)
 
+/**
+ * Fields the table UI renders outside its own columns, so slimming must not drop them.
+ * Textures resolve their preview image through `fileId`.
+ */
+private val TABLE_EXTRA_KEPT_FIELDS: Map<String, Set<String>> = mapOf(
+    ConfigDiffType.TEXTURES.fileName to setOf("fileId"),
+)
+
 /** Keep only fields useful for table listing / search (drops huge dumps from cold /table builds). */
 private fun slimTableFields(type: String, fields: Map<String, Any?>): Map<String, Any?> {
     val diffType = FILE_NAME_TO_DIFF_TYPE[type] ?: return fields
@@ -574,6 +591,7 @@ private fun slimTableFields(type: String, fields: Map<String, Any?>): Map<String
     for (aliases in diffType.tableColumns()) {
         keep.addAll(aliases)
     }
+    TABLE_EXTRA_KEPT_FIELDS[type]?.let { keep.addAll(it) }
     if (keep.size <= 2 && diffType.tableColumns().isEmpty()) return fields
     return fields.filterKeys { it in keep }
 }
@@ -1536,6 +1554,7 @@ fun Route.registerDiffEndpoints(config: ServerConfig) {
                 val hash = md5HexUtf8(
                     jsonCompact.toJson(
                         mapOf(
+                            "payloadVersion" to CONFIG_TABLE_PAYLOAD_VERSION,
                             "sourceHash" to sourceHash,
                             "queryHash" to queryHash,
                             "offset" to offset,
