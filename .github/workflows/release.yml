@@ -274,8 +274,32 @@ jobs:
             # --- cloudflare tunnel ----------------------------------------------------------
             if [ -n "${CLOUDFLARE_TUNNEL_ID:-}" ] && [ -n "${CLOUDFLARE_TUNNEL_CREDENTIALS:-}" ]; then
               mkdir -p /etc/cloudflared
-              printf '%s' "${CLOUDFLARE_TUNNEL_CREDENTIALS}" > "/etc/cloudflared/${CLOUDFLARE_TUNNEL_ID}.json"
-              chmod 600 "/etc/cloudflared/${CLOUDFLARE_TUNNEL_ID}.json"
+              creds="/etc/cloudflared/${CLOUDFLARE_TUNNEL_ID}.json"
+              # Cloudflare hands out the same tunnel two ways: the credentials file written by
+              # `cloudflared tunnel create` ({"AccountTag":..,"TunnelID":..,"TunnelSecret":..}), and
+              # the connector token shown in the dashboard — base64 of {"a":..,"t":..,"s":..}.
+              # `credentials-file:` only accepts the first, so a token is converted here instead of
+              # failing with "Invalid JSON ... invalid character 'e'".
+              if printf '%s' "${CLOUDFLARE_TUNNEL_CREDENTIALS}" | grep -q '^[[:space:]]*{'; then
+                printf '%s' "${CLOUDFLARE_TUNNEL_CREDENTIALS}" > "${creds}"
+              else
+                tok="$(printf '%s' "${CLOUDFLARE_TUNNEL_CREDENTIALS}" | tr -d '[:space:]')"
+                # base64 -d rejects unpadded input, and the dashboard sometimes strips the padding.
+                case $(( ${#tok} % 4 )) in
+                  2) tok="${tok}==" ;;
+                  3) tok="${tok}=" ;;
+                esac
+                printf '%s' "${tok}" | base64 -d \
+                  | jq -e '{AccountTag: .a, TunnelID: .t, TunnelSecret: .s}' > "${creds}"
+              fi
+              chmod 600 "${creds}"
+              # An id that disagrees with the credential only fails later, when connecting, with a
+              # much vaguer message than this one.
+              actual_id="$(jq -r '.TunnelID' "${creds}")"
+              if [ "${actual_id}" != "${CLOUDFLARE_TUNNEL_ID}" ]; then
+                echo "CLOUDFLARE_TUNNEL_ID is ${CLOUDFLARE_TUNNEL_ID} but the credential is for ${actual_id}" >&2
+                exit 1
+              fi
               sed "s/TUNNEL_ID/${CLOUDFLARE_TUNNEL_ID}/g" "${DEPLOY_DIR}/cloudflared-config.yml" \
                 > /etc/cloudflared/config.yml
               chmod 600 /etc/cloudflared/config.yml
