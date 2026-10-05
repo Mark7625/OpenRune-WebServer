@@ -1,8 +1,10 @@
 name: Backfill revisions
 
-# Imports older revisions on the deployed server, newest first. Long-running: the job starts it and
-# returns, the work continues on the box. Watch it on the ingestion page or with
-# `journalctl -u openrune-backfill@<instance> -f`.
+# Imports older revisions on the deployed server, oldest first — each import is a diff against the
+# revision before it, so they are always sorted ascending whatever order you list them in.
+# Long-running: the job starts it and returns, the work continues on the box. Watch it on the
+# ingestion page or with `journalctl -u openrune-backfill@<instance> -f`. Stop it with the
+# "Stop ingestion" workflow.
 on:
   workflow_dispatch:
     inputs:
@@ -11,7 +13,7 @@ on:
         required: true
         default: osrs
       revs:
-        description: "Revisions, e.g. 238,237,236 — or leave blank and use from/to"
+        description: "Revisions, e.g. 236,237,238 — order does not matter, they run ascending"
         required: false
         default: ""
       from:

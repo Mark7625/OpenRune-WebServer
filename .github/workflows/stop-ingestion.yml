@@ -1,0 +1,164 @@
+name: Stop ingestion
+
+# Kill switch for an import that is running on the box — a backfill working the wrong revisions, or
+# a weekly check that is taking longer than it should.
+#
+# Stopping the unit is the easy half. The import runs in its own process precisely so it cannot take
+# the API down with it, which also means it owns rows the API reads: the `backfill` queue and an
+# unfinished `ingest_run`. SIGTERM does not run the Kotlin `finally` that would clear them, so the
+# ingestion page would keep showing a job that no longer exists. This cleans up after itself.
+#
+# The API is never touched and stays up throughout, serving whatever is already published.
+on:
+  workflow_dispatch:
+    inputs:
+      instance:
+        description: "Instance to stop (matches instances/<name>.env)"
+        required: true
+        default: osrs
+      what:
+        description: "Which import to stop"
+        required: true
+        default: both
+        type: choice
+        options:
+          - both
+          - backfill
+          - weekly
+      requeue:
+        description: "Put a part-imported revision back in the queue (it was never published)"
+        required: false
+        default: true
+        type: boolean
+
+concurrency:
+  group: openrune-stop-${{ inputs.instance }}
+  cancel-in-progress: false
+
+jobs:
+  stop:
+    name: Stop import
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DEPLOY_DIR: /opt/openrune-webserver
+
+    steps:
+      - name: Stop and clean up on the server
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          INSTANCE: ${{ inputs.instance }}
+          WHAT: ${{ inputs.what }}
+          REQUEUE: ${{ inputs.requeue }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          envs: INSTANCE,WHAT,REQUEUE
+          script: |
+            set -euo pipefail
+
+            DEPLOY_DIR="${{ env.DEPLOY_DIR }}"
+            INSTANCE_ENV="${DEPLOY_DIR}/instances/${INSTANCE}.env"
+            test -f "${INSTANCE_ENV}" || { echo "Unknown instance '${INSTANCE}'" >&2; exit 1; }
+
+            set -a
+            . "${DEPLOY_DIR}/openrune.env"
+            . "${INSTANCE_ENV}"
+            set +a
+
+            # Mirrors Game.slugFor: OLDSCHOOL/LIVE is `osrs`, and a non-LIVE environment is suffixed.
+            case "${OPENRUNE_GAME}" in
+              OLDSCHOOL) base=osrs ;;
+              RUNESCAPE) base=rs3 ;;
+              *) base="$(printf '%s' "${OPENRUNE_GAME}" | tr '[:upper:]' '[:lower:]')" ;;
+            esac
+            if [ "${OPENRUNE_ENVIRONMENT}" = "LIVE" ]; then
+              SLUG="${base}"
+            else
+              SLUG="${base}-$(printf '%s' "${OPENRUNE_ENVIRONMENT}" | tr '[:upper:]' '[:lower:]')"
+            fi
+            # jdbc:postgresql://host:port/name -> name
+            DB_NAME="${OPENRUNE_DATABASE_URL##*/}"
+            echo "instance=${INSTANCE} game slug=${SLUG} database=${DB_NAME}"
+
+            stopped=""
+            stop_unit() {
+              unit="$1"
+              if systemctl is-active --quiet "${unit}"; then
+                echo "Stopping ${unit}..."
+                # A running import holds an advisory lock on the game row; systemd SIGTERMs, waits,
+                # then SIGKILLs, and Postgres drops the lock when the connection dies either way.
+                systemctl stop "${unit}"
+                stopped="${stopped} ${unit}"
+                echo "  stopped."
+              else
+                echo "${unit} is not running."
+              fi
+            }
+
+            if [ "${WHAT}" = "both" ] || [ "${WHAT}" = "backfill" ]; then
+              stop_unit "openrune-backfill@${INSTANCE}"
+              # Otherwise the next `systemctl start` would replay the queue we just cancelled.
+              rm -f "${DEPLOY_DIR}/instances/${INSTANCE}.backfill"
+            fi
+            if [ "${WHAT}" = "both" ] || [ "${WHAT}" = "weekly" ]; then
+              stop_unit "openrune-ingest@${INSTANCE}"
+            fi
+
+            echo
+            echo "Clearing state the stopped process would have cleared itself:"
+
+            requeue_sql=""
+            if [ "${REQUEUE}" = "true" ]; then
+              # A revision only becomes visible when it publishes at the end of its import, so a
+              # part-imported one is invisible to the API either way. Putting it back to DISCOVERED
+              # lets the next run pick it up; the merge is content-addressed, so re-importing lands
+              # on the same rows rather than duplicating them.
+              requeue_sql="UPDATE revision SET status = 'DISCOVERED', stage = NULL
+                             WHERE game_id = (SELECT id FROM game WHERE slug = '${SLUG}')
+                               AND NOT published
+                               AND status NOT IN ('DISCOVERED', 'FAILED');"
+            fi
+
+            sudo -u postgres psql -v ON_ERROR_STOP=1 -d "${DB_NAME}" <<SQL
+            \\set QUIET on
+            BEGIN;
+
+            -- Leaves the ingestion page showing a job that is still running, forever, if skipped.
+            UPDATE ingest_run
+               SET finished_at = now(),
+                   status = 'CANCELLED',
+                   stage = 'CANCELLED',
+                   error = COALESCE(error, 'Stopped by the stop-ingestion workflow')
+             WHERE finished_at IS NULL
+               AND game_id = (SELECT id FROM game WHERE slug = '${SLUG}');
+
+            ${requeue_sql}
+
+            DELETE FROM backfill WHERE game_id = (SELECT id FROM game WHERE slug = '${SLUG}');
+
+            COMMIT;
+            \\echo 'cleanup committed'
+
+            SELECT count(*) AS unfinished_runs
+              FROM ingest_run
+             WHERE finished_at IS NULL
+               AND game_id = (SELECT id FROM game WHERE slug = '${SLUG}');
+
+            SELECT count(*) AS queued_backfills
+              FROM backfill
+             WHERE game_id = (SELECT id FROM game WHERE slug = '${SLUG}');
+            SQL
+
+            echo
+            if [ -n "${stopped}" ]; then
+              echo "Stopped:${stopped}"
+            else
+              echo "Nothing was running; cleared any leftover state anyway."
+            fi
+
+            # The point of running imports out of process: stopping one cannot affect the API.
+            PORT="${OPENRUNE_PORT:-8090}"
+            echo "API still serving: $(curl -sS -m 5 "http://127.0.0.1:${PORT}/status" || echo 'unreachable')"

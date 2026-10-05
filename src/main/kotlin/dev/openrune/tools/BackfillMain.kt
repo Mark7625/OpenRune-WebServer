@@ -7,10 +7,18 @@ import mu.KotlinLogging
 private val logger = KotlinLogging.logger {}
 
 /**
- * Imports a list of older revisions, newest first, yielding to newly released caches as they
+ * Imports a list of older revisions, oldest first, yielding to newly released caches as they
  * appear.
  *
  * Flags: `revs=238,239,240` or `from=200 to=240`, plus the usual `game=` / `env=`.
+ *
+ * **Order is not a preference.** Every import is a diff against the revision before it: validity
+ * ranges are written as `valid_from = rev`, render reuse asks what an entity looked like at the
+ * previous published revision, and the CDN resolves an unchanged asset to the revision its content
+ * last changed in. Import 241 before 240 and 241 has nothing to diff against — so it re-renders and
+ * re-uploads everything — and 240 then lands behind a range that already starts above it, leaving
+ * the source revision the CDN resolves to wrong. Ascending keeps every one of those comparisons
+ * pointed at a revision that already exists.
  *
  * Before each queued revision it asks OpenRS2 whether anything newer than the latest published
  * revision has shown up; if so that is imported first and the queue resumes afterwards. The check
@@ -30,7 +38,7 @@ fun main(args: Array<String>) {
         require(queue.isNotEmpty()) { "revs=... or from=/to= is required" }
 
         backfill.start(gameId, queue)
-        logger.info { "Backfill queued ${queue.size} revision(s), newest first: ${queue.take(10)}${if (queue.size > 10) " …" else ""}" }
+        logger.info { "Backfill queued ${queue.size} revision(s), oldest first: ${queue.take(10)}${if (queue.size > 10) " …" else ""}" }
 
         // Assets are uploaded once at the end rather than between imports: a revision's sprites and
         // models are thousands of small objects, and that upload sitting between every import would
@@ -58,9 +66,10 @@ fun main(args: Array<String>) {
 
             if (uploaded.isNotEmpty()) {
                 logger.info { "All revisions imported; uploading assets for ${uploaded.size} revision(s) to the CDN" }
-                // Newest first, so the revisions people are most likely to open get their assets
-                // back soonest.
-                uploaded.sortedDescending().forEach { rev ->
+                // Ascending for the same reason the imports are: only the assets that changed at a
+                // revision are uploaded, and an unchanged one resolves to an earlier revision's
+                // object — which has to already be on the CDN for that link to answer.
+                uploaded.sorted().forEach { rev ->
                     // Recorded as a run so the dashboard shows this phase the same way it shows an
                     // import; without it the page would look idle for the length of the upload.
                     val runId = platform.ingestRevisions.startRun(gameId, rev)
@@ -81,7 +90,7 @@ fun main(args: Array<String>) {
     }
 }
 
-/** Highest first, de-duplicated, skipping anything already published. */
+/** Lowest first, de-duplicated, skipping anything already published. See the ordering note above. */
 private fun requestedRevisions(flags: ToolArgs, platform: Platform): List<Int> {
     val explicit = flags.ints("revs")
     val from = flags.int("from")
@@ -97,7 +106,7 @@ private fun requestedRevisions(flags: ToolArgs, platform: Platform): List<Int> {
             if (rev in published) logger.info { "rev $rev already published, skipping" }
             rev !in published
         }
-        .sortedDescending()
+        .sorted()
 }
 
 /**

@@ -5,7 +5,8 @@
 #
 #   ./backfill.sh [instance]
 #
-# The tool works newest first and checks OpenRS2 between revisions, so a cache released mid-run is
+# The tool works oldest first — each import diffs against the revision before it, so the order is
+# required, not cosmetic — and checks OpenRS2 between revisions, so a cache released mid-run is
 # imported ahead of the queue and the queue then resumes. Progress is in the `backfill` table, which
 # the API reports on /admin/overview.
 #
