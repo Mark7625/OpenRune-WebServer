@@ -1,0 +1,155 @@
+name: FileStore version check
+
+# A new game cache usually needs a new OpenRune-FileStore release to decode it, so this runs ahead
+# of the Wednesday ingest window: if upstream has published a newer build number than the one this
+# project depends on, bump it, prove it still builds, and ship it.
+#
+# Nothing is pushed unless the build and the test suite both pass on the new version. A failure
+# leaves the repository untouched and reports to Discord, so a broken upstream release can never
+# take the deployed API with it.
+
+on:
+  schedule:
+    # 09:00 UTC Wednesday — ahead of the 11:00 (server local) ingest window, with room for the
+    # build and deploy to finish first.
+    - cron: "0 9 * * 3"
+  workflow_dispatch:
+    inputs:
+      force_version:
+        description: "Bump to this version instead of whatever upstream reports"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: openrune-filestore-version
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: https://raw.githubusercontent.com/OpenRune/OpenRune-FileStore/main/build.gradle.kts
+  MAIN_BRANCH: main
+  PROD_BRANCH: production
+
+jobs:
+  check:
+    name: Check and bump
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.MAIN_BRANCH }}
+          fetch-depth: 0
+
+      - name: Resolve versions
+        id: versions
+        run: |
+          set -euo pipefail
+
+          current="$(grep -oP 'dev\.or2:all:\K[0-9][^"]*' build.gradle.kts | head -1)"
+          [ -n "${current}" ] || { echo "Could not find dev.or2:all in build.gradle.kts" >&2; exit 1; }
+
+          if [ -n "${{ inputs.force_version }}" ]; then
+            latest="${{ inputs.force_version }}"
+          else
+            # Upstream declares `val buildNumber = "x.y.z"` and uses it for group/version.
+            latest="$(curl -fsSL "${UPSTREAM}" | grep -oP 'val\s+buildNumber\s*=\s*"\K[^"]+' | head -1)"
+          fi
+          [ -n "${latest}" ] || { echo "Could not read buildNumber from upstream" >&2; exit 1; }
+
+          echo "current=${current}" >> "$GITHUB_OUTPUT"
+          echo "latest=${latest}" >> "$GITHUB_OUTPUT"
+          if [ "${current}" = "${latest}" ]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Already on dev.or2:all:${current}; nothing to do."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            echo "FileStore ${current} -> ${latest}"
+          fi
+
+      - name: Set up JDK 17
+        if: steps.versions.outputs.changed == 'true'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+          cache: gradle
+
+      - name: Bump and build
+        id: build
+        if: steps.versions.outputs.changed == 'true'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          sed -i "s|dev\.or2:all:${{ steps.versions.outputs.current }}|dev.or2:all:${{ steps.versions.outputs.latest }}|" build.gradle.kts
+          grep -n 'dev\.or2:all' build.gradle.kts
+          chmod +x gradlew
+          # Tests cover the schema, ingest and query paths, so this is a real gate and not just
+          # "does it compile".
+          ./gradlew test shadowJar --no-daemon --stacktrace 2>&1 | tee build.log
+
+      - name: Report failure to Discord
+        if: steps.versions.outputs.changed == 'true' && steps.build.outcome == 'failure'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -uo pipefail
+          [ -n "${DISCORD_WEBHOOK_URL:-}" ] || exit 0
+          tail="$(grep -E '^(e: |FAILURE|\* What went wrong|Caused by|> )' build.log 2>/dev/null | tail -n 25 || tail -n 25 build.log)"
+          printf ':x: **FileStore bump failed** — `dev.or2:all` %s → %s\n\nNothing was pushed; the deployed API is untouched and still on %s.\n%s\n```\n%s\n```' \
+            "${{ steps.versions.outputs.current }}" "${{ steps.versions.outputs.latest }}" \
+            "${{ steps.versions.outputs.current }}" "${RUN_URL}" "${tail}" \
+            | jq -Rs '{content: .}' \
+            | curl -sS -m 15 -H 'Content-Type: application/json' -d @- "${DISCORD_WEBHOOK_URL}" >/dev/null || true
+
+      - name: Stop if the build failed
+        if: steps.versions.outputs.changed == 'true' && steps.build.outcome == 'failure'
+        run: |
+          echo "Build failed on dev.or2:all:${{ steps.versions.outputs.latest }}; leaving the repository unchanged." >&2
+          exit 1
+
+      - name: Commit and push
+        if: steps.versions.outputs.changed == 'true' && steps.build.outcome == 'success'
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build.gradle.kts
+          git commit -m "Bump dev.or2:all to ${{ steps.versions.outputs.latest }}
+
+          OpenRune-FileStore published build ${{ steps.versions.outputs.latest }}; the cache decoders
+          move with it. Verified by the test suite before pushing."
+          git push origin "HEAD:${{ env.MAIN_BRANCH }}"
+
+          # Deploys run from `production`. Fast-forward only: if it has diverged, that is a human
+          # decision rather than something to force.
+          git push origin "HEAD:${{ env.PROD_BRANCH }}"
+
+      - name: Trigger the release workflow
+        if: steps.versions.outputs.changed == 'true' && steps.build.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # A push made with GITHUB_TOKEN does not itself trigger other workflows, so the deploy is
+          # dispatched explicitly against the branch we just updated.
+          gh workflow run release.yml --ref "${{ env.PROD_BRANCH }}"
+          echo "Dispatched release.yml on ${{ env.PROD_BRANCH }}"
+
+      - name: Report success to Discord
+        if: steps.versions.outputs.changed == 'true' && steps.build.outcome == 'success'
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+        run: |
+          set -uo pipefail
+          [ -n "${DISCORD_WEBHOOK_URL:-}" ] || exit 0
+          printf ':package: **FileStore bumped** — `dev.or2:all` %s → %s. Tests passed, pushed to `%s` and deploying.' \
+            "${{ steps.versions.outputs.current }}" "${{ steps.versions.outputs.latest }}" "${{ env.PROD_BRANCH }}" \
+            | jq -Rs '{content: .}' \
+            | curl -sS -m 15 -H 'Content-Type: application/json' -d @- "${DISCORD_WEBHOOK_URL}" >/dev/null || true

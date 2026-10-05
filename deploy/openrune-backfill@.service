@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenRune backfill for %i (older revisions, newest first)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/openrune-webserver
+EnvironmentFile=/opt/openrune-webserver/openrune.env
+EnvironmentFile=/opt/openrune-webserver/instances/%i.env
+ExecStart=/opt/openrune-webserver/backfill.sh %i
+User=root
+# Hours of work; no timeout. Stopping the unit stops it cleanly between revisions.
+TimeoutStartSec=0
+# A backfill that dies should stay dead — it is operator-initiated, and the queue it left behind
+# in the database records exactly where it got to.
+Restart=no

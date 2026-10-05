@@ -1,0 +1,94 @@
+name: Backfill revisions
+
+# Imports older revisions on the deployed server, newest first. Long-running: the job starts it and
+# returns, the work continues on the box. Watch it on the ingestion page or with
+# `journalctl -u openrune-backfill@<instance> -f`.
+on:
+  workflow_dispatch:
+    inputs:
+      instance:
+        description: "Instance to backfill (matches instances/<name>.env)"
+        required: true
+        default: osrs
+      revs:
+        description: "Revisions, e.g. 238,237,236 — or leave blank and use from/to"
+        required: false
+        default: ""
+      from:
+        description: "Range start (inclusive), used when revs is blank"
+        required: false
+        default: ""
+      to:
+        description: "Range end (inclusive), used when revs is blank"
+        required: false
+        default: ""
+
+concurrency:
+  group: openrune-backfill-${{ inputs.instance }}
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    name: Start backfill
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DEPLOY_DIR: /opt/openrune-webserver
+
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          if [ -z "${{ inputs.revs }}" ] && { [ -z "${{ inputs.from }}" ] || [ -z "${{ inputs.to }}" ]; }; then
+            echo "Provide either revs, or both from and to." >&2
+            exit 1
+          fi
+
+      - name: Start backfill on the server
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          INSTANCE: ${{ inputs.instance }}
+          REVS: ${{ inputs.revs }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          envs: INSTANCE,REVS,FROM,TO
+          script: |
+            set -euo pipefail
+
+            DEPLOY_DIR="${{ env.DEPLOY_DIR }}"
+            UNIT="openrune-backfill@${INSTANCE}"
+
+            test -f "${DEPLOY_DIR}/instances/${INSTANCE}.env" || {
+              echo "Unknown instance '${INSTANCE}'" >&2
+              exit 1
+            }
+
+            if systemctl is-active --quiet "${UNIT}"; then
+              echo "A backfill is already running for ${INSTANCE}:" >&2
+              systemctl status "${UNIT}" --no-pager || true
+              echo "Stop it first with: systemctl stop ${UNIT}" >&2
+              exit 1
+            fi
+
+            if [ -n "${REVS}" ]; then
+              ARGS="revs=${REVS}"
+            else
+              ARGS="from=${FROM} to=${TO}"
+            fi
+            echo "${ARGS}" > "${DEPLOY_DIR}/instances/${INSTANCE}.backfill"
+            chmod 600 "${DEPLOY_DIR}/instances/${INSTANCE}.backfill"
+
+            # Started detached: a backfill runs for hours and must outlive this SSH session.
+            systemctl start "${UNIT}"
+            sleep 5
+            systemctl status "${UNIT}" --no-pager | head -20
+
+            echo
+            echo "Backfill started. Follow it with:"
+            echo "  journalctl -u ${UNIT} -f"
+            echo "or on the ingestion page (admin token required)."

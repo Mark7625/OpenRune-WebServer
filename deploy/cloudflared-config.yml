@@ -1,0 +1,45 @@
+# Cloudflare Tunnel for the OpenRune APIs.
+#
+# One tunnel fronts every instance; each hostname routes to the local port that instance listens
+# on, so nothing is published to the internet directly and no inbound ports need opening. The
+# hostnames match what the website expects (see `cache-api-target.ts`).
+#
+# `TUNNEL_ID` and the credentials file are written by the deploy workflow.
+
+tunnel: TUNNEL_ID
+credentials-file: /etc/cloudflared/TUNNEL_ID.json
+
+# SSE is a long-lived streaming response. Cloudflare closes an idle proxied stream at ~100s and the
+# server sends a heartbeat every 25s, but cloudflared also needs to be told not to buffer and to
+# allow a connection to stay open well past a normal request.
+originRequest:
+  connectTimeout: 30s
+  # 0 = no limit: /sse never completes, and zip downloads of a full revision are large.
+  tcpKeepAlive: 30s
+  noHappyEyeballs: true
+  disableChunkedEncoding: false
+  http2Origin: false
+
+ingress:
+  # The website. Deployed from the openrune.github.io repo; this file owns the routing so there is
+  # one tunnel config on the box rather than two deploys fighting over it.
+  - hostname: openrune.dev
+    service: http://localhost:3000
+  - hostname: www.openrune.dev
+    service: http://localhost:3000
+
+  - hostname: osrs.openrune.dev
+    service: http://localhost:8090
+    originRequest:
+      # Streaming endpoints must not be buffered or timed out as if they were requests.
+      connectTimeout: 30s
+      tcpKeepAlive: 30s
+
+  - hostname: rs3.openrune.dev
+    service: http://localhost:8091
+    originRequest:
+      connectTimeout: 30s
+      tcpKeepAlive: 30s
+
+  # cloudflared requires a catch-all rule last.
+  - service: http_status:404

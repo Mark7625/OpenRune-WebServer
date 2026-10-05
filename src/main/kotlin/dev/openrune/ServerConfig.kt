@@ -16,7 +16,6 @@ import java.io.File
  * - OPENRUNE_CDN_ACCESS_KEY_ID / R2_ACCESS_KEY_ID / AWS_ACCESS_KEY_ID
  * - OPENRUNE_CDN_SECRET_ACCESS_KEY / R2_SECRET_ACCESS_KEY / AWS_SECRET_ACCESS_KEY
  * - OPENRUNE_CDN_ENABLED — true/false (default: true when bucket or base URL set)
- * - OPENRUNE_SPRITES_IN_BIN — keep PNG payloads in .bin (default true; set false once CDN is trusted)
  */
 data class SpriteCdnConfig(
     val enabled: Boolean = false,
@@ -28,8 +27,16 @@ data class SpriteCdnConfig(
     val endpoint: String? = null,
     val accessKeyId: String? = null,
     val secretAccessKey: String? = null,
-    /** When false, dump still uploads sprites to CDN but writes empty PNG map into .bin. */
-    val includeSpritesInBin: Boolean = true,
+    /**
+     * Redirect full-size sprite requests to the CDN instead of serving the bytes from PostgreSQL —
+     * the CDN is where assets belong, so this keeps that traffic off the API and the database.
+     *
+     * On by default. It assumes a revision's assets have been uploaded; a revision that has never
+     * been through `publishCdn` will redirect to an object that is not there. Set
+     * `OPENRUNE_CDN_REDIRECT_SPRITES=false` to serve from PostgreSQL instead while backfilling the
+     * CDN.
+     */
+    val redirectSprites: Boolean = true,
 ) {
     val canUpload: Boolean get() = enabled && !bucket.isNullOrBlank()
     val canServe: Boolean get() = enabled && !baseUrl.isNullOrBlank()
@@ -63,11 +70,12 @@ data class SpriteCdnConfig(
                 "0", "false", "no", "off" -> false
                 else -> bucket != null || baseUrl != null
             }
-            val inBin = when (envOrProp("OPENRUNE_SPRITES_IN_BIN")?.lowercase()) {
-                "0", "false", "no", "off" -> false
-                else -> true
-            }
+            // Opt-out rather than opt-in: redirecting is the intended behaviour, the flag exists
+            // for the window before a CDN has been filled.
+            val redirectSprites = envOrProp("OPENRUNE_CDN_REDIRECT_SPRITES")?.lowercase() !in
+                setOf("0", "false", "no", "off")
             return SpriteCdnConfig(
+                redirectSprites = redirectSprites,
                 enabled = enabled,
                 bucket = bucket,
                 region = region,
@@ -75,7 +83,6 @@ data class SpriteCdnConfig(
                 endpoint = endpoint?.trimEnd('/'),
                 accessKeyId = accessKeyId,
                 secretAccessKey = secretAccessKey,
-                includeSpritesInBin = inBin,
             )
         }
     }
@@ -83,15 +90,11 @@ data class SpriteCdnConfig(
 
 data class ServerConfig(
     val gameType: GameType,
+    /** OpenRS2 cache id used to seed the lowest revision the worker ingests; 0 or -1 for "newest". */
     val cacheID: Int,
     val environment: CacheEnvironment,
     val port: Int,
     /** Optional nav display-name overrides keyed by section/group id (e.g. "spotanim" -> "SpotAnim"). */
     val navDisplayNameOverrides: Map<String, String> = emptyMap(),
-    /** When set, extractors write to this dir (e.g. diff/) instead of extracted/. Used by DiffDumper. */
-    val diffOutputDir: File? = null,
     val spriteCdn: SpriteCdnConfig = SpriteCdnConfig.fromEnv(),
-) {
-    /** Resolved from cacheID via OpenRS2 during startup. -1 until loaded. */
-    var revision: Int = -1
-}
+)

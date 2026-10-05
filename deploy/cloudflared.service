@@ -1,0 +1,19 @@
+[Unit]
+Description=Cloudflare Tunnel for the OpenRune APIs
+After=network-online.target
+Wants=network-online.target
+# The tunnel coming up before the APIs is fine — cloudflared retries the origin — but starting
+# after them avoids a burst of 502s on a deploy.
+After=openrune-webserver@osrs.service
+StartLimitIntervalSec=0
+
+[Service]
+Type=notify
+ExecStart=/usr/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+# Without the tunnel nothing is reachable from outside, so keep retrying rather than giving up.
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

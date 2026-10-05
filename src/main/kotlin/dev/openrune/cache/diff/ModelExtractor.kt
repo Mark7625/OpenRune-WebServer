@@ -85,53 +85,7 @@ object ModelExtractor {
         objects = reverseObjects(objectTypes),
     )
 
-    /**
-     * Reverse attachments derived from already-serialized config snapshots, so callers holding
-     * merged `.bin` content do not have to re-decode the config archives.
-     */
-    fun attachmentsFromSnapshots(configs: Map<String, Map<Int, DefinitionSnapshot>>): Attachments {
-        val items = HashMap<Int, MutableList<Int>>()
-        configs[ConfigDiffType.ITEMS.fileName]?.forEach { (itemId, snapshot) ->
-            ITEM_MODEL_FIELDS.forEach { field ->
-                snapshot.intValue(field)?.let { modelId ->
-                    if (modelId > 0) items.getOrPut(modelId) { mutableListOf() }.add(itemId)
-                }
-            }
-        }
-        val npcs = HashMap<Int, MutableList<Int>>()
-        configs[ConfigDiffType.NPCS.fileName]?.forEach { (npcId, snapshot) ->
-            (snapshot.intListValue("models") + snapshot.intListValue("chatheadModels")).forEach { modelId ->
-                if (modelId > 0) npcs.getOrPut(modelId) { mutableListOf() }.add(npcId)
-            }
-        }
-        val objects = HashMap<Int, MutableList<Int>>()
-        configs[ConfigDiffType.OBJECTS.fileName]?.forEach { (objectId, snapshot) ->
-            snapshot.intListValue("objectModels").forEach { modelId ->
-                if (modelId > 0) objects.getOrPut(modelId) { mutableListOf() }.add(objectId)
-            }
-        }
-        return Attachments(items.sortDistinct(), npcs.sortDistinct(), objects.sortDistinct())
-    }
-
-    /**
-     * Build metadata for every model in the cache, including which items / npcs / objects use it.
-     */
-    fun extract(
-        cache: Cache,
-        itemTypes: Map<Int, ItemType>,
-        npcTypes: Map<Int, NpcType>,
-        objectTypes: Map<Int, ObjectType>,
-        ids: List<Int> = modelIds(cache),
-        showProgressBar: Boolean = true,
-        onProgress: (String) -> Unit = {},
-    ): Map<Int, ModelMeta> = extract(
-        cache = cache,
-        attachments = attachmentsFrom(itemTypes, npcTypes, objectTypes),
-        ids = ids,
-        showProgressBar = showProgressBar,
-        onProgress = onProgress,
-    )
-
+    /** Build metadata for every model in the cache, including which definitions reference it. */
     fun extract(
         cache: Cache,
         attachments: Attachments,
@@ -201,40 +155,6 @@ object ModelExtractor {
         return out
     }
 
-    private val ITEM_MODEL_FIELDS = listOf(
-        "inventoryModel",
-        "maleModel0", "maleModel1", "maleModel2",
-        "maleHeadModel0", "maleHeadModel1",
-        "femaleModel0", "femaleModel1", "femaleModel2",
-        "femaleHeadModel0", "femaleHeadModel1",
-    )
-
-    /**
-     * Model ids a single definition references, read straight from its stored snapshot.
-     * [type] is a [ConfigDiffType] file name; anything without model fields yields an empty list.
-     */
-    fun modelIdsForDefinition(type: String, snapshot: DefinitionSnapshot): List<Int> {
-        val ids = when (type) {
-            ConfigDiffType.ITEMS.fileName -> ITEM_MODEL_FIELDS.mapNotNull { snapshot.intValue(it) }
-            ConfigDiffType.NPCS.fileName ->
-                snapshot.intListValue("models") + snapshot.intListValue("chatheadModels")
-            ConfigDiffType.OBJECTS.fileName -> snapshot.intListValue("objectModels")
-            else -> emptyList()
-        }
-        return ids.filter { it > 0 }.distinct().sorted()
-    }
-
-    private fun DefinitionSnapshot.intValue(field: String): Int? = this[field]?.value as? Int
-
-    @Suppress("UNCHECKED_CAST")
-    private fun DefinitionSnapshot.intListValue(field: String): List<Int> {
-        val value = this[field]?.value ?: return emptyList()
-        return (value as? List<*>)?.filterIsInstance<Int>() ?: emptyList()
-    }
-
-    private fun Map<Int, MutableList<Int>>.sortDistinct(): Map<Int, List<Int>> =
-        mapValues { (_, ids) -> ids.distinct().sorted() }
-
     private fun reverseItems(itemTypes: Map<Int, ItemType>): Map<Int, List<Int>> {
         val map = HashMap<Int, MutableList<Int>>()
         itemTypes.forEach { (itemId, item) ->
@@ -270,16 +190,5 @@ object ModelExtractor {
             }
         }
         return map.mapValues { (_, ids) -> ids.distinct().sorted() }
-    }
-
-    /** Compare a revision's models against the base snapshot, mirroring the config diff shape. */
-    fun diff(base: Map<Int, ModelMeta>, current: Map<Int, ModelMeta>): ConfigDiffSummary {
-        val baseIds = base.keys
-        val currentIds = current.keys
-        return ConfigDiffSummary(
-            added = (currentIds - baseIds).sorted(),
-            removed = (baseIds - currentIds).sorted(),
-            changed = (baseIds intersect currentIds).filter { current[it] != base[it] }.sorted(),
-        )
     }
 }

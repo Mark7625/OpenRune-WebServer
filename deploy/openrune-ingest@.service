@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenRune cache ingest for %i (OpenRS2 poll)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/openrune-webserver
+EnvironmentFile=/opt/openrune-webserver/openrune.env
+EnvironmentFile=/opt/openrune-webserver/instances/%i.env
+ExecStart=/opt/openrune-webserver/ingest.sh
+User=root
+# A full base-revision import is the long pole; well under this, but do not hang a timer slot.
+TimeoutStartSec=3h

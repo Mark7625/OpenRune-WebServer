@@ -50,6 +50,8 @@ object ModelCdn {
         rev: Int,
         ids: List<Int>,
         dataFor: (Int) -> ByteArray?,
+        /** Lists the CDN prefix first and only uploads ids that are absent (repair after a failed run). */
+        onlyMissing: Boolean = false,
         maxAttempts: Int = DEFAULT_MAX_ATTEMPTS,
         onProgress: (String) -> Unit = {},
     ): ModelPublishResult {
@@ -68,15 +70,28 @@ object ModelCdn {
         val failedIds = mutableListOf<Int>()
         var missing = 0
         try {
-            onProgress("CDN: uploading ${ids.size} models to s3://$bucket/${modelsPrefix(game, rev)} (1-by-1)")
+            val existing = if (onlyMissing) {
+                onProgress("CDN: listing existing models for rev $rev…")
+                SpriteCdn.listUploadedIds(client, bucket, modelsPrefix(game, rev), ".dat").also { have ->
+                    onProgress("CDN: rev $rev already has ${have.size}/${ids.size} model objects")
+                }
+            } else {
+                emptySet()
+            }
+            val toUpload = ids.asSequence().filter { it !in existing }.sorted().toList()
+            if (toUpload.isEmpty()) {
+                onProgress("CDN: rev $rev models already complete")
+                return ModelPublishResult(rev, ids.size, 0, emptyList())
+            }
+            onProgress("CDN: uploading ${toUpload.size} models to s3://$bucket/${modelsPrefix(game, rev)} (1-by-1)")
             ProgressBarBuilder()
                 .setTaskName("rev $rev models")
-                .setInitialMax(ids.size.toLong())
+                .setInitialMax(toUpload.size.toLong())
                 .setStyle(ProgressBarStyle.UNICODE_BLOCK)
                 .setUpdateIntervalMillis(200)
                 .build()
                 .use { bar ->
-                    for (id in ids.sorted()) {
+                    for (id in toUpload) {
                         val bytes = dataFor(id)
                         if (bytes == null) {
                             missing++

@@ -26,11 +26,11 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Set up JDK 11
+      - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: "11"
+          java-version: "17"
           cache: gradle
 
       - name: Build shadow JAR
@@ -40,6 +40,13 @@ jobs:
 
       - name: Verify JAR output
         run: test -f build/libs/openrune-server.jar
+
+      - name: Upload JAR artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openrune-server-jar
+          path: build/libs/openrune-server.jar
+          retention-days: 7
 
       - name: Set release metadata
         id: meta
@@ -68,82 +75,237 @@ jobs:
           tag_name: ${{ steps.meta.outputs.tag }}
           name: ${{ steps.meta.outputs.name }}
           body: |
-            OpenRune WebServer shadow JAR.
+            OpenRune web server shadow JAR.
 
             **Commit:** [`${{ steps.meta.outputs.short_sha }}`](${{ steps.meta.outputs.commit_url }})
 
             ## Run
             ```bash
-            java -jar openrune-server.jar -1 OLDSCHOOL LIVE 8090
+            java -jar openrune-server.jar <openRs2CacheId> <game> <environment> <port>
             ```
-
-            ## Pterodactyl egg
-            - `JAR_UPDATE_REPO`: `Mark7625/OpenRune-WebServer`
-            - `SERVER_JAR`: `openrune-server.jar`
           files: build/libs/openrune-server.jar
           generate_release_notes: false
 
-  restart-cache-server:
-    name: Restart OSRS cache server
+  deploy:
+    name: Deploy to server
     needs: release
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     env:
-      PTERODACTYL_PANEL_URL: https://150.107.201.110
-      PTERODACTYL_SERVER_UUID: 3f6ee93d-e699-4f4e-937c-d77432ece708
+      DEPLOY_DIR: /opt/openrune-webserver
+      DB_NAME: openrune
+      DB_USER: openrune
+      # One line per instance: name|game|environment|port|openrs2 cache id|api heap|ingest heap.
+      # Add a row to run another stream; the units, timer and tunnel route follow from it.
+      INSTANCES: |
+        osrs|OLDSCHOOL|LIVE|8090|2727|2G|6G
+
     steps:
-      - name: Kill then start server
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download JAR artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: openrune-server-jar
+          path: dist
+
+      - name: Install JDK 17, PostgreSQL and the database
+        uses: appleboy/ssh-action@v1.0.3
         env:
-          PTERODACTYL_API_TOKEN: ${{ secrets.PTERODACTYL_API_TOKEN }}
-        run: |
-          set -euo pipefail
+          DB_PASSWORD: ${{ secrets.OPENRUNE_DB_PASSWORD }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          envs: DB_PASSWORD
+          script: |
+            set -euo pipefail
 
-          if [ -z "${PTERODACTYL_API_TOKEN:-}" ]; then
-            echo "Missing secret: PTERODACTYL_API_TOKEN"
-            exit 1
-          fi
+            DEPLOY_DIR="${{ env.DEPLOY_DIR }}"
+            DB_NAME="${{ env.DB_NAME }}"
+            DB_USER="${{ env.DB_USER }}"
 
-          PANEL="${PTERODACTYL_PANEL_URL%/}"
-          IDENTIFIER="${PTERODACTYL_SERVER_UUID%%-*}"
+            mkdir -p "${DEPLOY_DIR}" "${DEPLOY_DIR}/logs" "${DEPLOY_DIR}/instances"
 
-          power_signal() {
-            local signal="$1"
-            local http
-            http="$(curl -sS -k -o /tmp/pterodactyl-response.txt -w '%{http_code}' \
-              -X POST "${PANEL}/api/client/servers/${IDENTIFIER}/power" \
-              -H "Authorization: Bearer ${PTERODACTYL_API_TOKEN}" \
-              -H "Accept: application/json" \
-              -H "Content-Type: application/json" \
-              -d "{\"signal\":\"${signal}\"}")"
-            echo "POST /api/client/servers/${IDENTIFIER}/power signal=${signal} -> HTTP ${http}"
-            case "${http}" in
-              200|204) return 0 ;;
-            esac
-            cat /tmp/pterodactyl-response.txt || true
-            return 1
-          }
+            # The discord bot on this box runs on JDK 11, so install 17 alongside it and pin the
+            # unit to that path rather than changing the default `java`.
+            if [ ! -x /usr/lib/jvm/java-17-openjdk-amd64/bin/java ]; then
+              apt-get update -y
+              apt-get install -y openjdk-17-jdk-headless
+            fi
 
-          wait_for_state() {
-            local want="$1"
-            local attempts="${2:-30}"
-            local i state
-            for i in $(seq 1 "${attempts}"); do
-              state="$(curl -sS -k \
-                -H "Authorization: Bearer ${PTERODACTYL_API_TOKEN}" \
-                -H "Accept: application/json" \
-                "${PANEL}/api/client/servers/${IDENTIFIER}/resources" \
-                | python3 -c "import json,sys; print(json.load(sys.stdin)['attributes']['current_state'])" 2>/dev/null || echo unknown)"
-              echo "State check ${i}/${attempts}: ${state}"
-              if [ "${state}" = "${want}" ]; then
-                return 0
+            # jq escapes ingest log output into the Discord payload; curl posts it.
+            apt-get install -y --no-install-recommends jq curl postgresql postgresql-contrib
+
+            # cloudflared fronts every instance, so no API port is exposed to the internet.
+            if ! command -v cloudflared >/dev/null 2>&1; then
+              echo "Installing cloudflared..."
+              arch="$(dpkg --print-architecture)"
+              curl -fsSL -o /tmp/cloudflared.deb \
+                "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${arch}.deb"
+              dpkg -i /tmp/cloudflared.deb
+              rm -f /tmp/cloudflared.deb
+            else
+              echo "cloudflared already installed: $(cloudflared --version)"
+            fi
+
+            systemctl enable --now postgresql
+
+            # Idempotent: the role and database are created once, the password re-applied every
+            # deploy so rotating the secret only needs a re-run.
+            sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+            DO \$\$
+            BEGIN
+              IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${DB_USER}') THEN
+                CREATE ROLE ${DB_USER} LOGIN;
+              END IF;
+            END
+            \$\$;
+            ALTER ROLE ${DB_USER} WITH PASSWORD '${DB_PASSWORD}';
+            SQL
+
+            if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_database WHERE datname = '${DB_NAME}'" | grep -q 1; then
+              sudo -u postgres createdb -O "${DB_USER}" "${DB_NAME}"
+            fi
+
+            # Stock defaults (128MB shared_buffers, 4MB work_mem) make the set-based merge in the
+            # import spill to disk. These are the values the benchmarks in docs/BENCHMARKS.md used.
+            PG_CONF="$(sudo -u postgres psql -tAc 'SHOW config_file')"
+            if ! grep -q '^# openrune tuning' "${PG_CONF}"; then
+            cat >> "${PG_CONF}" <<'PGCONF'
+
+            # openrune tuning
+            shared_buffers = 512MB
+            work_mem = 48MB
+            maintenance_work_mem = 256MB
+            max_wal_size = 4GB
+            PGCONF
+              systemctl restart postgresql
+            fi
+
+      - name: Upload JAR and deploy files
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          source: "dist/openrune-server.jar,deploy/*"
+          target: ${{ env.DEPLOY_DIR }}
+          strip_components: 1
+
+      - name: Write config, install units, start instances and tunnel
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          DB_PASSWORD: ${{ secrets.OPENRUNE_DB_PASSWORD }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          OPENRUNE_ADMIN_TOKEN: ${{ secrets.OPENRUNE_ADMIN_TOKEN }}
+          R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          CLOUDFLARE_TUNNEL_ID: ${{ secrets.CLOUDFLARE_TUNNEL_ID }}
+          CLOUDFLARE_TUNNEL_CREDENTIALS: ${{ secrets.CLOUDFLARE_TUNNEL_CREDENTIALS }}
+          INSTANCES: ${{ env.INSTANCES }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          envs: DB_PASSWORD,DISCORD_WEBHOOK_URL,OPENRUNE_ADMIN_TOKEN,R2_ACCOUNT_ID,R2_ACCESS_KEY_ID,R2_SECRET_ACCESS_KEY,CLOUDFLARE_TUNNEL_ID,CLOUDFLARE_TUNNEL_CREDENTIALS,INSTANCES
+          script: |
+            set -euo pipefail
+
+            DEPLOY_DIR="${{ env.DEPLOY_DIR }}"
+
+            # Shared by every instance and by the ingest script, so they cannot drift apart.
+            # Anything game- or port-specific belongs in instances/<name>.env, not here.
+            cat > "${DEPLOY_DIR}/openrune.env" <<EOF
+            OPENRUNE_DATABASE_URL=jdbc:postgresql://localhost:5432/${{ env.DB_NAME }}
+            OPENRUNE_DATABASE_USER=${{ env.DB_USER }}
+            OPENRUNE_DATABASE_PASSWORD=${DB_PASSWORD}
+            OPENRUNE_ADMIN_TOKEN=${OPENRUNE_ADMIN_TOKEN}
+            OPENRUNE_DEPLOY_DIR=${DEPLOY_DIR}
+            DISCORD_WEBHOOK_URL=${DISCORD_WEBHOOK_URL}
+            R2_ACCOUNT_ID=${R2_ACCOUNT_ID}
+            R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+            R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+            R2_BUCKET_NAME=openrune
+            R2_PUBLIC_BASE_URL=https://cdn.openrune.dev
+            OPENRUNE_CDN_BUCKET=openrune
+            OPENRUNE_CDN_BASE_URL=https://cdn.openrune.dev
+            OPENRUNE_CDN_REGION=auto
+            OPENRUNE_CDN_ENABLED=true
+            EOF
+            chmod 600 "${DEPLOY_DIR}/openrune.env"
+            chmod 700 "${DEPLOY_DIR}/ingest.sh" "${DEPLOY_DIR}/backfill.sh"
+
+            install -m 644 "${DEPLOY_DIR}/openrune-webserver@.service" /etc/systemd/system/
+            install -m 644 "${DEPLOY_DIR}/openrune-ingest@.service" /etc/systemd/system/
+            install -m 644 "${DEPLOY_DIR}/openrune-ingest@.timer" /etc/systemd/system/
+            install -m 644 "${DEPLOY_DIR}/openrune-backfill@.service" /etc/systemd/system/
+            install -m 644 "${DEPLOY_DIR}/cloudflared.service" /etc/systemd/system/
+            systemctl daemon-reload
+
+            # --- instances ------------------------------------------------------------------
+            NAMES=""
+            while IFS='|' read -r name game environment port cache_id heap ingest_heap; do
+              [ -n "${name:-}" ] || continue
+              NAMES="${NAMES} ${name}"
+              cat > "${DEPLOY_DIR}/instances/${name}.env" <<EOF
+            OPENRUNE_INSTANCE=${name}
+            OPENRUNE_GAME=${game}
+            OPENRUNE_ENVIRONMENT=${environment}
+            OPENRUNE_PORT=${port}
+            OPENRUNE_CACHE_ID=${cache_id}
+            OPENRUNE_HEAP=${heap}
+            OPENRUNE_INGEST_HEAP=${ingest_heap}
+            EOF
+              chmod 600 "${DEPLOY_DIR}/instances/${name}.env"
+              systemctl enable "openrune-webserver@${name}"
+              systemctl enable --now "openrune-ingest@${name}.timer"
+              systemctl restart "openrune-webserver@${name}"
+              echo "configured ${name} on :${port} (${game}/${environment})"
+            done <<< "${INSTANCES}"
+
+            # --- cloudflare tunnel ----------------------------------------------------------
+            if [ -n "${CLOUDFLARE_TUNNEL_ID:-}" ] && [ -n "${CLOUDFLARE_TUNNEL_CREDENTIALS:-}" ]; then
+              mkdir -p /etc/cloudflared
+              printf '%s' "${CLOUDFLARE_TUNNEL_CREDENTIALS}" > "/etc/cloudflared/${CLOUDFLARE_TUNNEL_ID}.json"
+              chmod 600 "/etc/cloudflared/${CLOUDFLARE_TUNNEL_ID}.json"
+              sed "s/TUNNEL_ID/${CLOUDFLARE_TUNNEL_ID}/g" "${DEPLOY_DIR}/cloudflared-config.yml" \
+                > /etc/cloudflared/config.yml
+              chmod 600 /etc/cloudflared/config.yml
+              cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
+              systemctl enable cloudflared
+              systemctl restart cloudflared
+              echo "cloudflared restarted"
+            else
+              echo "CLOUDFLARE_TUNNEL_ID / _CREDENTIALS not set; skipping tunnel setup"
+            fi
+
+            # --- health -------------------------------------------------------------------
+            # Fail the deploy if an instance does not come up, rather than reporting success blindly.
+            while IFS='|' read -r name game environment port cache_id heap ingest_heap; do
+              [ -n "${name:-}" ] || continue
+              ok=0
+              for i in $(seq 1 30); do
+                if curl -fsS -m 3 "http://127.0.0.1:${port}/status" >/dev/null; then
+                  echo "${name} healthy after ${i}s: $(curl -sS "http://127.0.0.1:${port}/status")"
+                  ok=1
+                  break
+                fi
+                sleep 1
+              done
+              if [ "${ok}" -ne 1 ]; then
+                echo "${name} did not become healthy:"
+                journalctl -u "openrune-webserver@${name}" -n 50 --no-pager
+                exit 1
               fi
-              sleep 2
-            done
-            return 1
-          }
+            done <<< "${INSTANCES}"
 
-          power_signal kill
-          wait_for_state offline 30 || wait_for_state stopped 15 || true
-          sleep 3
-          power_signal start
-          wait_for_state running 60 || true
-          echo "Kill + start completed for ${IDENTIFIER} (${PTERODACTYL_SERVER_UUID})"
+            systemctl list-timers 'openrune-ingest@*' --no-pager || true
+            systemctl is-active cloudflared >/dev/null 2>&1 && cloudflared tunnel info "${CLOUDFLARE_TUNNEL_ID:-}" 2>/dev/null || true

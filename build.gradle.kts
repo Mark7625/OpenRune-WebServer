@@ -23,7 +23,7 @@ dependencies {
     implementation("io.ktor:ktor-server-cors:2.3.5")
     implementation("io.ktor:ktor-serialization-gson:2.3.5")
     implementation("io.ktor:ktor-server-status-pages:2.3.5")
-    implementation("dev.or2:all:2.4.16")
+    implementation("dev.or2:all:3.0.4")
     implementation("cc.ekblad:4koma:1.2.2-openrune")
 
     // JSON serialization with Gson
@@ -46,7 +46,15 @@ dependencies {
     implementation(platform("software.amazon.awssdk:bom:2.25.60"))
     implementation("software.amazon.awssdk:s3")
 
+    // PostgreSQL storage
+    implementation("org.postgresql:postgresql:42.7.4")
+    implementation("com.zaxxer:HikariCP:5.1.0")
+    implementation("com.github.ben-manes.caffeine:caffeine:3.1.8")
+
     testImplementation(kotlin("test"))
+    testImplementation("org.junit.jupiter:junit-jupiter:5.10.2")
+    testImplementation("io.zonky.test:embedded-postgres:2.0.7")
+    testImplementation(platform("io.zonky.test.postgres:embedded-postgres-binaries-bom:16.2.0"))
 }
 
 application {
@@ -79,140 +87,58 @@ tasks {
         group = null
     }
 
-    fun registerBootTask(name: String, cacheID : Int,gameType: String, environment: String) {
+    /** `boot*` tasks serve one game stream; the revision set comes from PostgreSQL, not the args. */
+    fun registerBootTask(name: String, cacheID: Int, gameType: String, environment: String, port: Int = 8090) {
         register<JavaExec>(name) {
             group = "application"
-            description = "Boots the RuneScape cache with $gameType ($environment)"
+            description = "Serves $gameType ($environment) on port $port"
             mainClass.set("dev.openrune.MainKt")
             classpath = sourceSets["main"].runtimeClasspath
-            args = listOf(cacheID.toString(),gameType, environment)
-            jvmArgs("-Xmx8G")
-        }
-    }
-
-    fun registerBootTaskDev(name: String, cacheID : Int,gameType: String, environment: String) {
-        register<JavaExec>(name) {
-            group = "application"
-            description = "Boots the RuneScape cache with $gameType ($environment)"
-            mainClass.set("dev.openrune.MainKt")
-            classpath = sourceSets["main"].runtimeClasspath
-            args = listOf(cacheID.toString(),gameType, environment)
-            jvmArgs("-Xmx8G","-Dopenrune.perf.logs=true","-Dopenrune.table.logs=true")
-        }
-    }
-
-    registerBootTask("bootRunescape",    -1,   "RUNESCAPE3", "LIVE")
-    registerBootTask("bootOldschool",    2649, "OLDSCHOOL",   "LIVE")
-    registerBootTaskDev("bootOldschoolDev", 2649,   "OLDSCHOOL",   "DEV")
-    registerBootTask("bootSailing",      -1,   "OLDSCHOOL",   "BETA")
-
-    register<JavaExec>("runDownloadAllCaches") {
-        group = "application"
-        description = "Download and unzip all OSRS caches (rev 1 to latest) one by one for later dumping"
-        mainClass.set("dev.openrune.DownloadAllCachesMainKt")
-        classpath = sourceSets["main"].runtimeClasspath
-    }
-
-    register<JavaExec>("runDumperMain") {
-        group = "application"
-        description = "Runs the DiffDumper entrypoint in DumperMainKt"
-        mainClass.set("dev.openrune.DumperMainKt")
-        classpath = sourceSets["main"].runtimeClasspath
-        jvmArgs("-Xmx4G")
-    }
-
-    register<JavaExec>("migrateSpritesToCdn") {
-        group = "cdn"
-        description =
-            "Upload sprite PNGs from local .bin diffs to S3/R2 CDN (reconstructs full set per rev). " +
-                "Props: -PcdnFrom=1 -PcdnTo=500 -PcdnDryRun=true -PcdnRepair=true -PcdnSkipUnchanged=true"
-        mainClass.set("dev.openrune.MigrateSpritesToCdnMainKt")
-        classpath = sourceSets["main"].runtimeClasspath
-        jvmArgs("-Xmx8G")
-        // Prefer working dir = project root so cache/ + .env resolve.
-        workingDir = rootProject.projectDir
-
-        val passProps = listOf(
-            "cdnGame",
-            "cdnEnv",
-            "cdnFrom",
-            "cdnTo",
-            "cdnDryRun",
-            "cdnSkipUnchanged",
-            "cdnRepair",
-        )
-        for (key in passProps) {
-            if (project.hasProperty(key)) {
-                systemProperty(key, project.property(key).toString())
-            }
-        }
-        // Also accept CLI args after -- e.g. gradlew migrateSpritesToCdn -- dryRun=true from=100
-        if (project.hasProperty("cdnArgs")) {
-            args = project.property("cdnArgs").toString().split(Regex("\\s+")).filter { it.isNotBlank() }
-        }
-    }
-
-    /**
-     * Model migration entrypoint. [defaults] are applied first, then overridden by any
-     * -Pcdn* property on the command line, so every task below stays tweakable.
-     */
-    fun registerModelTask(
-        name: String,
-        taskDescription: String,
-        defaults: Map<String, String> = emptyMap(),
-    ) {
-        register<JavaExec>(name) {
-            group = "cdn"
-            description = taskDescription
-            mainClass.set("dev.openrune.MigrateModelsToCdnMainKt")
-            classpath = sourceSets["main"].runtimeClasspath
-            jvmArgs("-Xmx8G")
-            // Prefer working dir = project root so cache/ + .env resolve.
+            args = listOf(cacheID.toString(), gameType, environment, port.toString())
+            jvmArgs("-Xmx2G")
             workingDir = rootProject.projectDir
+        }
+    }
 
-            val passProps = listOf(
-                "cdnGame",
-                "cdnEnv",
-                "cdnFrom",
-                "cdnTo",
-                "cdnDryRun",
-                "cdnSkipCdn",
-                "cdnSkipBin",
-                "cdnForce",
-                "cdnSkipTextures",
-            )
-            defaults.forEach { (key, value) -> systemProperty(key, value) }
-            for (key in passProps) {
-                if (project.hasProperty(key)) {
-                    systemProperty(key, project.property(key).toString())
-                }
-            }
-            if (project.hasProperty("cdnArgs")) {
-                args = project.property("cdnArgs").toString().split(Regex("\\s+")).filter { it.isNotBlank() }
+    registerBootTask("bootOldschool", 2727, "OLDSCHOOL", "LIVE")
+    registerBootTask("bootRunescape", -1, "RUNESCAPE3", "LIVE", port = 8091)
+    registerBootTask("bootSailing", -1, "OLDSCHOOL", "BETA", port = 8092)
+
+    fun registerTool(name: String, mainClassName: String, taskDescription: String, heap: String = "4G") {
+        register<JavaExec>(name) {
+            group = "postgres"
+            description = taskDescription
+            mainClass.set(mainClassName)
+            classpath = sourceSets["main"].runtimeClasspath
+            jvmArgs("-Xmx$heap")
+            workingDir = rootProject.projectDir
+            if (project.hasProperty("toolArgs")) {
+                args = project.property("toolArgs").toString().split(Regex("\\s+")).filter { it.isNotBlank() }
             }
         }
     }
 
-    registerModelTask(
-        "migrateModelsToCdn",
-        "Upload model .dat files to S3/R2 CDN and write model metadata into the revision bins. " +
-            "Props: -PcdnFrom=1 -PcdnTo=500 -PcdnDryRun=true -PcdnSkipCdn=true -PcdnSkipBin=true -PcdnForce=true",
-    )
+    register<JavaExec>("runServer") {
+        group = "application"
+        description = "Run the server with explicit arguments: -PserverArgs=\"2649 OLDSCHOOL LIVE 8090\""
+        mainClass.set("dev.openrune.MainKt")
+        classpath = sourceSets["main"].runtimeClasspath
+        jvmArgs("-Xmx2G")
+        workingDir = rootProject.projectDir
+        if (project.hasProperty("serverArgs")) {
+            args = project.property("serverArgs").toString().split(Regex("\\s+")).filter { it.isNotBlank() }
+        }
+    }
 
-    registerModelTask(
-        "migrate240",
-        "Rev 240 models + textures: uploads model .dat files and textures.zip, and writes model " +
-            "metadata into 240.bin. Everything else in the bin is left as-is. " +
-            "Override the rev with -PcdnFrom/-PcdnTo.",
-        defaults = mapOf("cdnFrom" to "240", "cdnTo" to "240"),
-    )
-
-    registerModelTask(
-        "uploadModelsToCdn",
-        "Upload model .dat files to S3/R2 CDN only - no .bin is rewritten, no textures.zip. " +
-            "Props: -PcdnFrom=240 -PcdnTo=240 -PcdnDryRun=true",
-        defaults = mapOf("cdnSkipBin" to "true", "cdnSkipTextures" to "true"),
-    )
+    registerTool("ingestRevisions", "dev.openrune.tools.IngestMainKt", "Ingest revisions from OpenRS2 into PostgreSQL: -PtoolArgs=\"revs=240,241\"")
+    registerTool("backfill", "dev.openrune.tools.BackfillMainKt", "Import older revisions newest first, yielding to new releases: -PtoolArgs=\"from=200 to=239\"", heap = "8G")
+    registerTool("importLegacyBins", "dev.openrune.tools.ImportLegacyBinsMainKt", "Import legacy .bin revisions into PostgreSQL: -PtoolArgs=\"from=1 to=241\"", heap = "8G")
+    registerTool("validateLegacy", "dev.openrune.tools.ValidateAgainstLegacyMainKt", "Compare PostgreSQL state and diffs against legacy .bin files: -PtoolArgs=\"revs=1,240,241\"", heap = "8G")
+    registerTool("benchmark", "dev.openrune.tools.BenchmarkMainKt", "Benchmark the query paths: -PtoolArgs=\"revs=1,240,241\"", heap = "4G")
+    registerTool("publishCdn", "dev.openrune.tools.PublishCdnMainKt", "Re-upload sprites / textures.zip / model .dat to the CDN: -PtoolArgs=\"revs=241 repair=true\"", heap = "8G")
+    registerTool("renderSample", "dev.openrune.tools.RenderSampleMainKt", "Render a few item / object images to eyeball settings: -PtoolArgs=\"rev=241 items=4151\"", heap = "4G")
+    registerTool("resetDatabase", "dev.openrune.tools.ResetDatabaseMainKt", "Drop all platform tables (destructive): -PtoolArgs=\"confirm=true\"", heap = "512M")
+    registerTool("syntheticScale", "dev.openrune.tools.SyntheticScaleMainKt", "Generate an RS3-sized synthetic stream and measure: -PtoolArgs=\"revs=50 types=20 entities=100000\"")
 }
 
 

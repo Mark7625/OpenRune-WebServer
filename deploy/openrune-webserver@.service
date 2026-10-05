@@ -1,0 +1,28 @@
+[Unit]
+# Templated so each game stream is its own service on its own port: `openrune-webserver@osrs`,
+# `openrune-webserver@rs3`. They share the database and the jar, nothing else.
+Description=OpenRune web server (%i)
+After=network.target postgresql.service
+Wants=postgresql.service
+# systemd gives up after 5 restarts in 10s by default. The API fails fast when PostgreSQL is not
+# up yet, so a reboot could burn through that in seconds and leave the service dead until someone
+# noticed. 0 means keep retrying forever, which is what "restarts automatically" should mean.
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/openrune-webserver
+# Shared secrets first, then the per-instance game/port, which may override.
+EnvironmentFile=/opt/openrune-webserver/openrune.env
+EnvironmentFile=/opt/openrune-webserver/instances/%i.env
+# Ingestion is driven by openrune-ingest@%i.timer in its own process, so a failed import can never
+# take the API down with it. Do not turn this on here.
+Environment=OPENRUNE_INGEST_ENABLED=false
+ExecStart=/usr/lib/jvm/java-17-openjdk-amd64/bin/java -Xmx${OPENRUNE_HEAP} -jar /opt/openrune-webserver/openrune-server.jar ${OPENRUNE_CACHE_ID} ${OPENRUNE_GAME} ${OPENRUNE_ENVIRONMENT} ${OPENRUNE_PORT}
+# `always`, not `on-failure`: an API that exits for any reason, cleanly or not, should come back.
+Restart=always
+RestartSec=5
+User=root
+
+[Install]
+WantedBy=multi-user.target

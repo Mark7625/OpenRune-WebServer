@@ -1,0 +1,17 @@
+[Unit]
+Description=Check OpenRS2 for a new %i cache (Wednesdays, hourly 11:00-17:00)
+
+[Timer]
+Unit=openrune-ingest@%i.service
+# OSRS updates land Wednesday morning but the cache does not appear on OpenRS2 at a fixed time,
+# so this polls across the window instead of guessing one moment. Firings with nothing new are
+# a no-op that exits 0.
+OnCalendar=Wed *-*-* 11..17:00:00
+# Spread the instances so two imports do not start in the same second and queue on the advisory
+# lock; RandomizedDelaySec is per-timer, which is enough with only a couple of streams.
+RandomizedDelaySec=120
+Persistent=false
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

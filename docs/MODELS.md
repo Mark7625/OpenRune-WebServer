@@ -1,6 +1,6 @@
 # Models
 
-Two halves: raw meshes go to the CDN, per-model metadata goes into the revision binary.
+Two halves: raw meshes go to the CDN, per-model metadata goes into PostgreSQL.
 
 ## Meshes (CDN)
 
@@ -9,10 +9,11 @@ Two halves: raw meshes go to the CDN, per-model metadata goes into the revision 
 ```
 
 Raw index-7 archive bytes, one object per model, a **full set per revision** so a rev path is
-self-contained (same rule as sprites). Uploaded during every dump; see [SPRITE_CDN.md](SPRITE_CDN.md)
-for the bucket/credential env vars — models reuse the same CDN config.
+self-contained (same rule as sprites). Uploaded after a revision is published; see
+[SPRITE_CDN.md](SPRITE_CDN.md) for the bucket/credential env vars — models reuse the same CDN
+config. The website loads `.dat` files straight from the CDN, never through the API.
 
-## Metadata (`models.json` → `.bin`)
+## Metadata (`models.json` → PostgreSQL)
 
 Meshes are decoded **once per revision**. The result is written to a sidecar next to that
 revision's downloaded cache:
@@ -21,11 +22,8 @@ revision's downloaded cache:
 cache/{game}/{env}/{rev}/models.json
 ```
 
-Every later dump or migrate run reads that JSON instead of decoding ~60k meshes again. Delete the
-file, or pass `-PcdnForce=true`, to rebuild it.
-
-The same JSON is what gets embedded in the revision binary, under an `MDLM` trailer — the meshes
-themselves are never stored in a bin. Entry keys are short because a revision holds ~60k of them:
+A re-ingest of the same revision reads that JSON instead of decoding ~60k meshes again. Delete the
+file to force a rebuild. Entry keys are short because a revision holds ~60k of them:
 
 ```json
 {"1234":{"v":124,"f":198,"tf":4,"ver":13,"pri":0,"tex":[52],"col":[8128],"items":[4151],"npcs":[],"objs":[]}}
@@ -41,14 +39,10 @@ themselves are never stored in a bin. Entry keys are short because a revision ho
 | `col` | `colors` | distinct HSL face colours |
 | `items` / `npcs` / `objs` | `itemIds` / `npcIds` / `objectIds` | reverse attachments |
 
-Decoded into `ModelMeta`:
-
-Rev 1 stores the full set; later revisions store only added/changed entries plus an
-added/removed/changed summary, exactly like config diffs. The trailer is marker-prefixed, so bins
-written before models existed still decode (they just report no models).
-
-Attachments come from `inventoryModel` + the male/female worn and head model fields on items,
-`models` + `chatheadModels` on npcs, and `objectModels` on objects.
+Each entry becomes one `models` entity version in PostgreSQL, so a model that does not change
+between revisions is stored once and its validity range simply extends. Attachments come from
+`inventoryModel` plus the male/female worn and head model fields on items, `models` +
+`chatheadModels` on npcs, and `objectModels` on objects.
 
 ## API
 
@@ -62,11 +56,12 @@ Attachments come from `inventoryModel` + the male/female worn and head model fie
 | `GET /models/info?rev=` | Aggregate stats for a revision |
 
 `/models/for` accepts `items`, `npcs` or `objects`. Model ids are read from the definition's stored
-snapshot (`inventoryModel` + worn/head fields, `models` + `chatheadModels`, `objectModels`), so ids
+payload (`inventoryModel` + worn/head fields, `models` + `chatheadModels`, `objectModels`), so ids
 the definition points at but which have no metadata are reported under `totals.missingModels`.
 
 `/models` requires one of `ids`, `idRange` or `limit` — the full set is too large to return.
-Responses are capped at 500 entries.
+Responses are capped at 500 entries. `/models/table` also returns `nextCursor`; pass it back as
+`after=` to page without an offset scan.
 
 ## Texture usage
 
@@ -83,37 +78,25 @@ Responses are capped at 500 entries.
 | `GET /textures/{id}/usage?rev=` | Full usage for one texture, plus its `fileId`, name, `averageRgb`, transparency and animation fields |
 | `GET /textures/usage?rev=` | Every texture with usage counts — a browsable index |
 
-The index is built once per revision from the merged model set and config snapshots, then cached.
+The index is built by streaming the revision's model and config payloads, then cached per revision
+and pre-warmed for the hot revisions (see ARCHITECTURE.md §2.6).
 
-## Backfill
+## Backfilling
 
-Revisions dumped before models existed can be filled in without a re-dump. The cache for each
-revision must already be on disk (`./gradlew runDownloadAllCaches`):
+Metadata is part of normal ingestion; mesh uploads can be re-run on their own:
 
 ```bash
-./gradlew migrate240                                          # rev 240: model .dat + textures.zip + 240.bin metadata
-./gradlew uploadModelsToCdn -PcdnFrom=240 -PcdnTo=240         # upload .dat only, no bin, no textures.zip
-
-./gradlew migrateModelsToCdn                                  # every rev that has a cache
-./gradlew migrateModelsToCdn -PcdnFrom=1 -PcdnTo=1            # base rev first — keeps later deltas small
-./gradlew migrateModelsToCdn -PcdnDryRun=true                 # decode + count only
-./gradlew migrateModelsToCdn -PcdnSkipCdn=true                # metadata only, no uploads
-./gradlew migrateModelsToCdn -PcdnSkipBin=true                # uploads only, leave bins alone
-./gradlew migrateModelsToCdn -PcdnForce=true                  # re-decode meshes, rebuild models.json
-./gradlew migrateModelsToCdn -PcdnSkipTextures=true           # models only, no textures.zip
+./gradlew ingestRevisions -PtoolArgs="revs=241"                            # decode, import, publish, upload
+./gradlew publishCdn -PtoolArgs="revs=241 kinds=models"                    # re-upload .dat only
+./gradlew publishCdn -PtoolArgs="kinds=models repair=true"                 # fill gaps across every revision
+./gradlew publishCdn -PtoolArgs="revs=241 kinds=models downloadCache=true" # raw cache no longer on disk
 ```
 
-`migrate240` and `uploadModelsToCdn` are just `migrateModelsToCdn` with defaults pre-set; every
-`-Pcdn*` property still overrides them (e.g. `./gradlew migrate240 -PcdnFrom=241 -PcdnTo=241`).
+Model uploads need the revision's raw cache because the meshes are not stored in the database;
+`downloadCache=true` fetches it from OpenRS2 first. See [SPRITE_CDN.md](SPRITE_CDN.md) for the full
+flag list.
 
-`textures.zip` is built from the merged texture config: each texture's `fileId` is fetched from the
-sprites already on the CDN for that revision, and only if some are missing does the task fall back to
-decoding the revision's sprite index.
-
-The task rewrites each `.bin` in place, preserving everything already in it and adding the model
-trailer. Attachments are rebuilt from the config snapshots already stored in the bins, so the config
-archives are never decoded twice — and meshes are only decoded when a revision has no `models.json`
-yet, so re-runs are cheap.
-
-Run rev 1 first: deltas for later revisions are computed against rev 1's model set, and if that is
-empty every model is recorded as "added".
+Revisions whose history only exists as legacy `.bin` files are imported with
+`./gradlew importLegacyBins`, which reads the model metadata out of the bin's `MDLM` trailer. Those
+revisions have no mesh bytes in the database either, so their `.dat` upload also needs
+`downloadCache=true`.

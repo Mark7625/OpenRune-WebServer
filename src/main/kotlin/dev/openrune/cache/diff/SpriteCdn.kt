@@ -41,8 +41,10 @@ data class SpritePublishResult(
     val skippedExisting: Int,
     val failedIds: List<Int>,
     val zipUploaded: Boolean,
+    /** The zip was deliberately not sent because it is unchanged, as opposed to having failed. */
+    val zipSkipped: Boolean = false,
 ) {
-    val ok: Boolean get() = failedIds.isEmpty() && (total == 0 || zipUploaded)
+    val ok: Boolean get() = failedIds.isEmpty() && (total == 0 || zipUploaded || zipSkipped)
 }
 
 class SpriteCdnPublishException(
@@ -93,6 +95,64 @@ object SpriteCdn {
         return "$base/${spriteObjectKey(game, rev, id)}"
     }
 
+    /** `{game}/rev/{rev}/{folder}/{id}.png` — rendered item and object images. */
+    fun imageObjectKey(game: GameType, rev: Int, folder: String, id: Int): String =
+        "${game.cdnSlug()}/rev/$rev/$folder/$id.png"
+
+    fun publicImageUrl(cdn: SpriteCdnConfig, game: GameType, rev: Int, folder: String, id: Int): String? {
+        val base = cdn.baseUrl?.trimEnd('/') ?: return null
+        return "$base/${imageObjectKey(game, rev, folder, id)}"
+    }
+
+    /**
+     * Uploads a set of rendered PNGs under one folder. Unlike [publishRevisionSprites] there is no
+     * zip and no index — these are standalone images the website links directly.
+     *
+     * Returns the ids that failed, so one bad upload reports without aborting the batch.
+     */
+    fun publishImages(
+        cdn: SpriteCdnConfig,
+        game: GameType,
+        rev: Int,
+        folder: String,
+        images: Map<Int, ByteArray>,
+        maxAttempts: Int = DEFAULT_MAX_ATTEMPTS,
+        onProgress: (String) -> Unit = {},
+    ): List<Int> {
+        if (images.isEmpty()) {
+            onProgress("CDN: no $folder images to publish for rev $rev")
+            return emptyList()
+        }
+        if (!cdn.canUpload) {
+            onProgress("CDN: $folder upload skipped (set OPENRUNE_CDN_BUCKET to enable)")
+            return emptyList()
+        }
+        val bucket = cdn.bucket!!
+        val client = s3Client(cdn)
+        val failed = mutableListOf<Int>()
+        try {
+            onProgress("CDN: uploading ${images.size} $folder images to s3://$bucket/${game.cdnSlug()}/rev/$rev/$folder/")
+            images.entries.sortedBy { it.key }.forEach { (id, bytes) ->
+                val ok = putObjectWithRetry(
+                    client = client,
+                    bucket = bucket,
+                    key = imageObjectKey(game, rev, folder, id),
+                    bytes = bytes,
+                    contentType = "image/png",
+                    cacheControl = "public, max-age=31536000, immutable",
+                    maxAttempts = maxAttempts,
+                )
+                if (!ok) failed += id
+            }
+            if (failed.isNotEmpty()) {
+                onProgress("CDN: rev $rev failed ${failed.size}/${images.size} $folder uploads")
+            }
+        } finally {
+            runCatching { client.close() }
+        }
+        return failed
+    }
+
     fun publicSpritesZipUrl(cdn: SpriteCdnConfig, game: GameType, rev: Int): String? {
         val base = cdn.baseUrl?.trimEnd('/') ?: return null
         return "$base/${spritesZipObjectKey(game, rev)}"
@@ -113,6 +173,17 @@ object SpriteCdn {
         sprites: Map<Int, ByteArray>,
         onlyMissing: Boolean = false,
         maxAttempts: Int = DEFAULT_MAX_ATTEMPTS,
+        /**
+         * When set, only these ids are uploaded as individual PNGs — the rest are unchanged since
+         * an earlier revision and already on the CDN under that revision's prefix. `sprites.zip`
+         * is still built from the full set, so a zip is always complete for its revision.
+         */
+        uploadOnly: Set<Int>? = null,
+        /**
+         * False when the sprite set is unchanged since an earlier revision — the zip would be byte
+         * for byte what is already on the CDN under that revision, so there is nothing to send.
+         */
+        uploadZip: Boolean = true,
         onProgress: (String) -> Unit = {},
     ): SpritePublishResult {
         if (sprites.isEmpty()) {
@@ -154,12 +225,12 @@ object SpriteCdn {
                 }
 
             val toUpload = sprites.entries
-                .filter { (id, _) -> id !in existing }
+                .filter { (id, _) -> id !in existing && (uploadOnly == null || id in uploadOnly) }
                 .sortedBy { it.key }
             val skipped = sprites.size - toUpload.size
             onProgress(
                 "CDN: uploading ${toUpload.size} sprites" +
-                    (if (skipped > 0) " (skipping $skipped existing)" else "") +
+                    (if (skipped > 0) " (skipping $skipped unchanged/existing)" else "") +
                     " to s3://$bucket/${spritesPrefix(game, rev)} (1-by-1)",
             )
 
@@ -211,6 +282,19 @@ object SpriteCdn {
                     zipUploaded = false,
                 )
                 throw SpriteCdnPublishException(result, msg)
+            }
+
+            if (!uploadZip) {
+                onProgress("CDN: rev $rev sprites.zip unchanged, not re-uploaded")
+                return SpritePublishResult(
+                    rev = rev,
+                    total = sprites.size,
+                    uploaded = uploaded,
+                    skippedExisting = skipped,
+                    failedIds = emptyList(),
+                    zipUploaded = false,
+                    zipSkipped = true,
+                )
             }
 
             onProgress("CDN: uploading sprites.zip for rev $rev…")
@@ -313,8 +397,11 @@ object SpriteCdn {
         }
     }
 
-    fun listUploadedSpriteIds(client: S3Client, bucket: String, game: GameType, rev: Int): Set<Int> {
-        val prefix = spritesPrefix(game, rev)
+    fun listUploadedSpriteIds(client: S3Client, bucket: String, game: GameType, rev: Int): Set<Int> =
+        listUploadedIds(client, bucket, spritesPrefix(game, rev), ".png")
+
+    /** Ids of `{prefix}{id}{suffix}` objects already in the bucket; used to upload only what is missing. */
+    fun listUploadedIds(client: S3Client, bucket: String, prefix: String, suffix: String): Set<Int> {
         val ids = HashSet<Int>(4096)
         var token: String? = null
         do {
@@ -326,9 +413,8 @@ object SpriteCdn {
             val resp = client.listObjectsV2(req)
             for (obj in resp.contents()) {
                 val key = obj.key() ?: continue
-                if (!key.endsWith(".png")) continue
-                val name = key.removePrefix(prefix).removeSuffix(".png")
-                name.toIntOrNull()?.let { ids.add(it) }
+                if (!key.endsWith(suffix)) continue
+                key.removePrefix(prefix).removeSuffix(suffix).toIntOrNull()?.let { ids.add(it) }
             }
             token = if (resp.isTruncated) resp.nextContinuationToken() else null
         } while (token != null)
@@ -348,35 +434,43 @@ object SpriteCdn {
         }.getOrNull()
     }
 
-    fun resizePng(png: ByteArray, width: Int?, height: Int?, keepAspectRatio: Boolean): ByteArray {
+    /**
+     * @param allowUpscale when false the requested size is a maximum: a sprite already smaller than
+     *   it is returned untouched. Callers rendering a thumbnail want this — most cache sprites are
+     *   tiny (map icons are 15x15) and blowing them up to fill the box only produces a blurry,
+     *   oversized image the browser then has to clamp back down.
+     */
+    fun resizePng(
+        png: ByteArray,
+        width: Int?,
+        height: Int?,
+        keepAspectRatio: Boolean,
+        allowUpscale: Boolean = true,
+    ): ByteArray {
         if ((width == null || width <= 0) && (height == null || height <= 0)) return png
         val src = ImageIO.read(ByteArrayInputStream(png)) ?: return png
         val sw = src.width.coerceAtLeast(1)
         val sh = src.height.coerceAtLeast(1)
-        val tw: Int
-        val th: Int
+        val targetW = width?.takeIf { it > 0 }
+        val targetH = height?.takeIf { it > 0 }
+        var tw: Int
+        var th: Int
         if (keepAspectRatio) {
-            val targetW = width?.takeIf { it > 0 }
-            val targetH = height?.takeIf { it > 0 }
-            when {
-                targetW != null && targetH != null -> {
-                    val scale = minOf(targetW.toDouble() / sw, targetH.toDouble() / sh)
-                    tw = (sw * scale).toInt().coerceAtLeast(1)
-                    th = (sh * scale).toInt().coerceAtLeast(1)
-                }
-                targetW != null -> {
-                    tw = targetW
-                    th = (sh * (targetW.toDouble() / sw)).toInt().coerceAtLeast(1)
-                }
-                targetH != null -> {
-                    th = targetH
-                    tw = (sw * (targetH.toDouble() / sh)).toInt().coerceAtLeast(1)
-                }
+            val scale = when {
+                targetW != null && targetH != null -> minOf(targetW.toDouble() / sw, targetH.toDouble() / sh)
+                targetW != null -> targetW.toDouble() / sw
+                targetH != null -> targetH.toDouble() / sh
                 else -> return png
-            }
+            }.let { if (allowUpscale) it else minOf(it, 1.0) }
+            tw = (sw * scale).toInt().coerceAtLeast(1)
+            th = (sh * scale).toInt().coerceAtLeast(1)
         } else {
-            tw = (width?.takeIf { it > 0 } ?: sw)
-            th = (height?.takeIf { it > 0 } ?: sh)
+            tw = targetW ?: sw
+            th = targetH ?: sh
+            if (!allowUpscale) {
+                tw = tw.coerceAtMost(sw)
+                th = th.coerceAtMost(sh)
+            }
         }
         if (tw == sw && th == sh) return png
         val scaled = java.awt.image.BufferedImage(tw, th, java.awt.image.BufferedImage.TYPE_INT_ARGB)
