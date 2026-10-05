@@ -20,12 +20,11 @@ DEPLOY_DIR="${OPENRUNE_DEPLOY_DIR:-/opt/openrune-webserver}"
 INSTANCE="${1:-${OPENRUNE_INSTANCE:-osrs}}"
 
 # Sourced explicitly rather than relying on systemd, so a manual run behaves identically.
-set -a
+# Read as data, never sourced: a secret containing `|` or `;` would otherwise be run as a command.
 # shellcheck disable=SC1090,SC1091
-. "${DEPLOY_DIR}/openrune.env"
-# shellcheck disable=SC1090
-. "${DEPLOY_DIR}/instances/${INSTANCE}.env"
-set +a
+. "${DEPLOY_DIR}/env-load.sh"
+load_env_file "${DEPLOY_DIR}/openrune.env"
+load_env_file "${DEPLOY_DIR}/instances/${INSTANCE}.env"
 
 JAVA="${OPENRUNE_JAVA:-/usr/lib/jvm/java-17-openjdk-amd64/bin/java}"
 JAR="${DEPLOY_DIR}/openrune-server.jar"

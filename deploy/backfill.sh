@@ -15,12 +15,11 @@ set -uo pipefail
 DEPLOY_DIR="${OPENRUNE_DEPLOY_DIR:-/opt/openrune-webserver}"
 INSTANCE="${1:-${OPENRUNE_INSTANCE:-osrs}}"
 
-set -a
+# Read as data, never sourced: a secret containing `|` or `;` would otherwise be run as a command.
 # shellcheck disable=SC1090,SC1091
-. "${DEPLOY_DIR}/openrune.env"
-# shellcheck disable=SC1090
-. "${DEPLOY_DIR}/instances/${INSTANCE}.env"
-set +a
+. "${DEPLOY_DIR}/env-load.sh"
+load_env_file "${DEPLOY_DIR}/openrune.env"
+load_env_file "${DEPLOY_DIR}/instances/${INSTANCE}.env"
 
 ARGS_FILE="${DEPLOY_DIR}/instances/${INSTANCE}.backfill"
 [ -f "${ARGS_FILE}" ] || { echo "No backfill request at ${ARGS_FILE}" >&2; exit 1; }
