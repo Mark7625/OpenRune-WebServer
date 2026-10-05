@@ -279,9 +279,17 @@ jobs:
               sed "s/TUNNEL_ID/${CLOUDFLARE_TUNNEL_ID}/g" "${DEPLOY_DIR}/cloudflared-config.yml" \
                 > /etc/cloudflared/config.yml
               chmod 600 /etc/cloudflared/config.yml
+              # Only checks the ingress rules — it does not read the credentials file or contact
+              # Cloudflare, so a bad tunnel id or credential still validates cleanly.
               cloudflared --config /etc/cloudflared/config.yml tunnel ingress validate
               systemctl enable cloudflared
-              systemctl restart cloudflared
+              # Which is why the credentials only fail here. Print the reason rather than leaving
+              # the deploy to report "control process exited with error code" and nothing else.
+              if ! systemctl restart cloudflared; then
+                echo "cloudflared failed to start:"
+                journalctl -u cloudflared -n 50 --no-pager
+                exit 1
+              fi
               echo "cloudflared restarted"
             else
               echo "CLOUDFLARE_TUNNEL_ID / _CREDENTIALS not set; skipping tunnel setup"
