@@ -70,7 +70,7 @@ data or their published state:
 | Flag | Meaning |
 |------|---------|
 | `revs=` / `from=` `to=` | which published revisions (default: all of them) |
-| `kinds=` | `sprites`, `textures`, `models` (default: all three) |
+| `kinds=` | `sprites`, `textures`, `models`, `items`, `objects` (default: all of them) |
 | `repair=true` | list the CDN prefix first, upload only absent objects |
 | `dryRun=true` | report what would be uploaded, contact nothing |
 | `downloadCache=true` | download the raw cache when models are requested and it is absent |
@@ -81,3 +81,8 @@ uploads read the revision's raw cache, which `downloadCache=true` will fetch.
 
 Ingestion runs the same publisher after publishing a revision, so this tool is only needed for
 backfill, repair, or a bucket change.
+
+On the deployed box the same tool runs from the **Publish CDN** workflow, which starts
+`openrune-publishcdn@<instance>` and returns — see `deploy/README.md`. Either way it records progress
+per revision (asset kind, objects sent of objects to send) in the `backfill` table's `cdn_*` columns
+and in an `ingest_run` row, which is what the ingestion page draws. A `dryRun` records nothing.

@@ -34,8 +34,16 @@ object Views {
             .associate { it.def.sectionId to ((counts[it.id] ?: 0) > 0) }
         val spriteCount = counts[ctx.type(OsrsEntityTypes.SPRITES).id] ?: 0
         val textureCount = counts[ctx.type(ConfigDiffType.TEXTURES.fileName).id] ?: 0
+        // The nav lists Models alongside the other archives, so it needs an availability flag like
+        // them. The page lists meshes from this metadata, so a revision with none has nothing to show.
+        val modelCount = counts[ctx.type(OsrsEntityTypes.MODELS).id] ?: 0
         val gamevalsPresent = ctx.game.types.any { it.def.kind == EntityKind.GAMEVAL && (counts[it.id] ?: 0) > 0 }
-        val archives = linkedMapOf("sprites" to (spriteCount > 0), "textures" to (textureCount > 0), "gamevals" to gamevalsPresent)
+        val archives = linkedMapOf(
+            "sprites" to (spriteCount > 0),
+            "textures" to (textureCount > 0),
+            "models" to (modelCount > 0),
+            "gamevals" to gamevalsPresent,
+        )
         mapOf(
             "rev" to rev,
             "archives" to archives,

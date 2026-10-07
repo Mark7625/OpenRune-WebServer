@@ -1,0 +1,167 @@
+name: Publish CDN
+
+# Uploads the assets of revisions that are **already imported** — sprites, textures.zip, model
+# meshes and rendered item/object images. Nothing is imported and no revision changes state, so this
+# is safe to run against a live API: the bytes come back out of PostgreSQL and the raw cache.
+#
+# This is what to run when a backfill's import phase finished but its upload phase did not — a
+# deploy restarts the units, and the upload is the last thing a backfill does, so it is the part
+# most likely to be cut short. `repair=true` lists the bucket first and sends only what is missing,
+# which makes a re-run cheap.
+#
+# Long-running: the job starts it and returns, the work continues on the box. Watch it on the
+# ingestion page (it reports per revision, with a file count) or with
+# `journalctl -u openrune-publishcdn@<instance> -f`. Stop it with the "Stop ingestion" workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      instance:
+        description: "Instance to publish for (matches instances/<name>.env)"
+        required: true
+        default: osrs
+      revs:
+        description: "Revisions, e.g. 225,226,227 — blank means every published revision"
+        required: false
+        default: ""
+      from:
+        description: "Range start (inclusive), used when revs is blank"
+        required: false
+        default: ""
+      to:
+        description: "Range end (inclusive), used when revs is blank"
+        required: false
+        default: ""
+      kinds:
+        description: "Asset kinds to upload"
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - sprites
+          - textures
+          - models
+          - items
+          - objects
+          - sprites,textures
+          - items,objects
+      repair:
+        description: "List the CDN first and upload only what is missing (slower to start, cheap to re-run)"
+        required: false
+        default: true
+        type: boolean
+      uploadUnchanged:
+        description: "Upload every asset at each revision, not only what changed there (rebuilds a prefix in full)"
+        required: false
+        default: false
+        type: boolean
+      downloadCache:
+        description: "Fetch the raw cache from OpenRS2 when models are wanted and it is not on disk"
+        required: false
+        default: true
+        type: boolean
+      dryRun:
+        description: "Report what would be uploaded and contact nothing"
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: openrune-publishcdn-${{ inputs.instance }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Start CDN publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      DEPLOY_DIR: /opt/openrune-webserver
+
+    steps:
+      - name: Validate inputs
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.revs }}" ] && { [ -n "${{ inputs.from }}" ] || [ -n "${{ inputs.to }}" ]; }; then
+            echo "Give either revs, or from/to, not both." >&2
+            exit 1
+          fi
+          if { [ -n "${{ inputs.from }}" ] && [ -z "${{ inputs.to }}" ]; } ||
+             { [ -z "${{ inputs.from }}" ] && [ -n "${{ inputs.to }}" ]; }; then
+            echo "from and to go together." >&2
+            exit 1
+          fi
+
+      - name: Start CDN publish on the server
+        uses: appleboy/ssh-action@v1.0.3
+        env:
+          INSTANCE: ${{ inputs.instance }}
+          REVS: ${{ inputs.revs }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          KINDS: ${{ inputs.kinds }}
+          REPAIR: ${{ inputs.repair }}
+          UPLOAD_UNCHANGED: ${{ inputs.uploadUnchanged }}
+          DOWNLOAD_CACHE: ${{ inputs.downloadCache }}
+          DRY_RUN: ${{ inputs.dryRun }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          envs: INSTANCE,REVS,FROM,TO,KINDS,REPAIR,UPLOAD_UNCHANGED,DOWNLOAD_CACHE,DRY_RUN
+          script: |
+            set -euo pipefail
+
+            DEPLOY_DIR="${{ env.DEPLOY_DIR }}"
+            UNIT="openrune-publishcdn@${INSTANCE}"
+
+            test -f "${DEPLOY_DIR}/instances/${INSTANCE}.env" || {
+              echo "Unknown instance '${INSTANCE}'" >&2
+              exit 1
+            }
+
+            if systemctl is-active --quiet "${UNIT}"; then
+              echo "A CDN publish is already running for ${INSTANCE}:" >&2
+              systemctl status "${UNIT}" --no-pager || true
+              echo "Stop it first with: systemctl stop ${UNIT}" >&2
+              exit 1
+            fi
+
+            # A backfill ends by uploading the revisions it imported, so letting both run would have
+            # two processes PUTting the same objects and fighting over the same `backfill` row.
+            if systemctl is-active --quiet "openrune-backfill@${INSTANCE}"; then
+              echo "A backfill is running for ${INSTANCE}; it uploads its own revisions when it finishes." >&2
+              echo "Wait for it, or stop it with the \"Stop ingestion\" workflow first." >&2
+              exit 1
+            fi
+
+            ARGS=""
+            if [ -n "${REVS}" ]; then
+              ARGS="revs=${REVS}"
+            elif [ -n "${FROM}" ]; then
+              ARGS="from=${FROM} to=${TO}"
+            fi
+            # Anything else means every published revision, which is the tool's own default.
+
+            # `if` rather than `[ x ] && ARGS=...`: under `set -e` a false test is a failed command
+            # and would abort the script before anything started.
+            if [ "${KINDS}" != "all" ]; then ARGS="${ARGS} kinds=${KINDS}"; fi
+            if [ "${REPAIR}" = "true" ]; then ARGS="${ARGS} repair=true"; fi
+            if [ "${UPLOAD_UNCHANGED}" = "true" ]; then ARGS="${ARGS} uploadUnchanged=true"; fi
+            if [ "${DOWNLOAD_CACHE}" = "true" ]; then ARGS="${ARGS} downloadCache=true"; fi
+            if [ "${DRY_RUN}" = "true" ]; then ARGS="${ARGS} dryRun=true"; fi
+
+            echo "flags:${ARGS}"
+            echo "${ARGS}" > "${DEPLOY_DIR}/instances/${INSTANCE}.publishcdn"
+            chmod 600 "${DEPLOY_DIR}/instances/${INSTANCE}.publishcdn"
+
+            # Started detached: an upload runs for hours and must outlive this SSH session.
+            systemctl start "${UNIT}"
+            sleep 5
+            systemctl status "${UNIT}" --no-pager | head -20
+
+            echo
+            echo "CDN publish started. Follow it with:"
+            echo "  journalctl -u ${UNIT} -f"
+            echo "or on the ingestion page (admin token required)."

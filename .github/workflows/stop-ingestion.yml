@@ -25,6 +25,7 @@ on:
           - both
           - backfill
           - weekly
+          - publishcdn
       requeue:
         description: "Put a part-imported revision back in the queue (it was never published)"
         required: false
@@ -112,6 +113,12 @@ jobs:
             fi
             if [ "${WHAT}" = "both" ] || [ "${WHAT}" = "weekly" ]; then
               stop_unit "openrune-ingest@${INSTANCE}"
+            fi
+            if [ "${WHAT}" = "both" ] || [ "${WHAT}" = "publishcdn" ]; then
+              # Uploads only; nothing it was doing can leave a revision half-imported, so there is
+              # nothing to requeue — just the cdn_* columns below, cleared with everything else.
+              stop_unit "openrune-publishcdn@${INSTANCE}"
+              rm -f "${DEPLOY_DIR}/instances/${INSTANCE}.publishcdn"
             fi
 
             echo

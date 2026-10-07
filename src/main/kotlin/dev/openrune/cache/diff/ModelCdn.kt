@@ -54,6 +54,8 @@ object ModelCdn {
         onlyMissing: Boolean = false,
         maxAttempts: Int = DEFAULT_MAX_ATTEMPTS,
         onProgress: (String) -> Unit = {},
+        /** (meshes handled so far, meshes this call will handle); see `SpriteCdn.publishRevisionSprites`. */
+        onCount: (done: Int, total: Int) -> Unit = { _, _ -> },
     ): ModelPublishResult {
         if (ids.isEmpty()) {
             onProgress("CDN: no models to publish for rev $rev")
@@ -84,6 +86,7 @@ object ModelCdn {
                 return ModelPublishResult(rev, ids.size, 0, emptyList())
             }
             onProgress("CDN: uploading ${toUpload.size} models to s3://$bucket/${modelsPrefix(game, rev)} (1-by-1)")
+            onCount(0, toUpload.size)
             ProgressBarBuilder()
                 .setTaskName("rev $rev models")
                 .setInitialMax(toUpload.size.toLong())
@@ -109,6 +112,7 @@ object ModelCdn {
                         }
                         bar.step()
                         bar.setExtraMessage("id=$id ok=$uploaded fail=${failedIds.size}")
+                        onCount(uploaded + failedIds.size + missing, toUpload.size)
                     }
                 }
         } finally {

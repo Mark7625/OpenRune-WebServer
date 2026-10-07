@@ -102,6 +102,14 @@ fun Route.adminRoutes(ctx: ApiContext, admin: AdminContext) {
                         mapOf(
                             "pending" to it.pending, "done" to it.done, "failed" to it.failed,
                             "total" to it.total, "pausedFor" to it.pausedFor,
+                            // Null until the imports finish and the upload phase opens.
+                            "cdn" to it.cdn.takeIf { c -> c.running }?.let { c ->
+                                mapOf(
+                                    "pending" to c.pending, "done" to c.done, "total" to c.total,
+                                    "rev" to c.rev, "stage" to c.stage,
+                                    "files" to c.files, "filesTotal" to c.filesTotal, "percent" to c.percent,
+                                )
+                            },
                             "startedAt" to it.startedAt.toString(), "updatedAt" to it.updatedAt.toString(),
                         )
                     },

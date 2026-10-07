@@ -4,9 +4,15 @@ import dev.openrune.Platform
 import dev.openrune.ServerConfig
 import dev.openrune.cache.tools.CacheEnvironment
 import dev.openrune.cache.tools.GameType
+import dev.openrune.cdn.CdnPublisher
 import dev.openrune.db.DatabaseConfig
 import dev.openrune.envOrProp
 import dev.openrune.loadDotEnv
+import dev.openrune.store.BackfillRepository
+import dev.openrune.store.RevisionRepository
+import mu.KotlinLogging
+
+private val logger = KotlinLogging.logger {}
 
 /** `key=value` command line flags shared by the tools. */
 class ToolArgs(args: Array<String>) {
@@ -46,6 +52,37 @@ fun openPlatform(
         ?: error("OPENRUNE_DATABASE_URL must be set (e.g. jdbc:postgresql://localhost:5432/openrune)")
     val config = ServerConfig(gameType = gameType, cacheID = 0, environment = environment, port = 0)
     return Platform(config, dbConfig, types)
+}
+
+/**
+ * Puts one revision's CDN upload where the dashboard can see it: the `backfill` row's `cdn_*`
+ * columns, and the revision's `ingest_run`. Both are read by the API, which is a different process.
+ *
+ * Every object PUT reports, so this is thousands of calls per revision — a write only happens when
+ * the asset kind changes or [writeEveryMs] has passed. A failed write is logged and dropped: a
+ * progress row is not worth losing an upload over.
+ */
+class CdnProgressRecorder(
+    private val backfill: BackfillRepository,
+    private val revisions: RevisionRepository,
+    private val gameId: Int,
+    private val rev: Int,
+    private val runId: Long,
+    private val writeEveryMs: Long = 1_000,
+) : (CdnPublisher.CdnProgress) -> Unit {
+    private var lastStage: String? = null
+    private var lastWriteAt = 0L
+
+    override fun invoke(p: CdnPublisher.CdnProgress) {
+        val now = System.currentTimeMillis()
+        if (p.stage == lastStage && now - lastWriteAt < writeEveryMs) return
+        lastStage = p.stage
+        lastWriteAt = now
+        runCatching {
+            backfill.cdnProgress(gameId, rev, p.stage, p.done, p.total, p.percent)
+            revisions.updateRunProgress(runId, "CDN", p.percent, p.label)
+        }.onFailure { logger.debug(it) { "Could not record CDN progress for rev $rev" } }
+    }
 }
 
 fun peakHeapMb(): Long =

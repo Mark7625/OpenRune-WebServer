@@ -1,0 +1,17 @@
+[Unit]
+Description=OpenRune CDN publish for %i (upload assets of already-imported revisions)
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/openrune-webserver
+EnvironmentFile=/opt/openrune-webserver/openrune.env
+EnvironmentFile=/opt/openrune-webserver/instances/%i.env
+ExecStart=/opt/openrune-webserver/publish-cdn.sh %i
+User=root
+# Thousands of small PUTs per revision; no timeout. Stopping the unit stops it between objects.
+TimeoutStartSec=0
+# Operator-initiated, and re-running it with repair=true picks up exactly what is still missing —
+# so a dead run should stay dead rather than restart from the top.
+Restart=no

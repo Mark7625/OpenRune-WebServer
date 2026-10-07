@@ -118,6 +118,7 @@ object SpriteCdn {
         images: Map<Int, ByteArray>,
         maxAttempts: Int = DEFAULT_MAX_ATTEMPTS,
         onProgress: (String) -> Unit = {},
+        onCount: (done: Int, total: Int) -> Unit = { _, _ -> },
     ): List<Int> {
         if (images.isEmpty()) {
             onProgress("CDN: no $folder images to publish for rev $rev")
@@ -132,6 +133,8 @@ object SpriteCdn {
         val failed = mutableListOf<Int>()
         try {
             onProgress("CDN: uploading ${images.size} $folder images to s3://$bucket/${game.cdnSlug()}/rev/$rev/$folder/")
+            onCount(0, images.size)
+            var done = 0
             images.entries.sortedBy { it.key }.forEach { (id, bytes) ->
                 val ok = putObjectWithRetry(
                     client = client,
@@ -143,6 +146,7 @@ object SpriteCdn {
                     maxAttempts = maxAttempts,
                 )
                 if (!ok) failed += id
+                onCount(++done, images.size)
             }
             if (failed.isNotEmpty()) {
                 onProgress("CDN: rev $rev failed ${failed.size}/${images.size} $folder uploads")
@@ -185,6 +189,12 @@ object SpriteCdn {
          */
         uploadZip: Boolean = true,
         onProgress: (String) -> Unit = {},
+        /**
+         * Called with (objects PUT so far, objects this call will PUT) after each PNG, so a caller
+         * driving a progress bar can show a file count rather than a phase name. The total is only
+         * known after the existing/unchanged ids are filtered out, so it arrives with the first call.
+         */
+        onCount: (done: Int, total: Int) -> Unit = { _, _ -> },
     ): SpritePublishResult {
         if (sprites.isEmpty()) {
             onProgress("CDN: no sprites to publish for rev $rev")
@@ -236,6 +246,7 @@ object SpriteCdn {
 
             var uploaded = 0
             val failedIds = mutableListOf<Int>()
+            onCount(0, toUpload.size)
 
             if (toUpload.isNotEmpty()) {
                 ProgressBarBuilder()
@@ -262,6 +273,7 @@ object SpriteCdn {
                             }
                             bar.step()
                             bar.setExtraMessage("id=$id ok=$uploaded fail=${failedIds.size}")
+                            onCount(uploaded + failedIds.size, toUpload.size)
                         }
                     }
             }

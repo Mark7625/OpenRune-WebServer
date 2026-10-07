@@ -13,6 +13,8 @@ Triggered by a push to `production`, a `v*` tag, or manually.
   openrune.env             shared secrets + config, chmod 600
   instances/<name>.env     per-instance game, environment, port, heap
   ingest.sh                the Wednesday job
+  backfill.sh              operator-started import of older revisions
+  publish-cdn.sh           operator-started CDN upload, imports nothing
   logs/ingest-*.log        one per ingest run, pruned after 30 days
 /etc/cloudflared/
   config.yml               hostname -> local port
@@ -25,6 +27,7 @@ Triggered by a push to `production`, a `v*` tag, or manually.
 | `openrune-ingest@<name>.timer` | fires hourly on Wednesdays, 11:00–17:00 |
 | `openrune-ingest@<name>.service` | one-shot, runs `ingest.sh <name>` |
 | `openrune-backfill@<name>` | operator-started import of older revisions |
+| `openrune-publishcdn@<name>` | operator-started CDN upload for revisions already imported |
 | `cloudflared` | the tunnel fronting every instance |
 
 ## Backfilling older revisions
@@ -92,13 +95,45 @@ already swallows its own failures, so a CDN outage leaves the revision published
 
 **Progress** is in the `backfill` table, reported on `/admin/overview` and drawn on the ingestion
 page: how many are done, how many queued, which are next, a note when it has stepped aside for a new
-release, and a note while it is uploading assets at the end. Stopping the unit stops it cleanly after
-the current revision; the queue in the database records exactly where it got to.
+release, and — during the upload at the end — which revision is going up and how many of its files
+are done. Stopping the unit stops it cleanly after the current revision; the queue in the database
+records exactly where it got to.
 
 ```bash
 journalctl -u openrune-backfill@osrs -f
 systemctl stop openrune-backfill@osrs      # finishes the current revision, then stops
 ```
+
+## Uploading assets without importing anything
+
+Because the upload is the *last* thing a backfill does, it is the part most likely to be cut short —
+a deploy restarts the units, and the imports it already finished are published and safe while their
+images are not up yet. The **Publish CDN** workflow sends the assets of revisions that are already in
+the database, importing nothing:
+
+| input | example | notes |
+|-------|---------|-------|
+| instance | `osrs` | |
+| revs | `225,226,227` | blank and no range means every published revision |
+| from / to | `225` / `241` | instead of `revs` |
+| kinds | `all` | or `sprites`, `models`, `items,objects`, … |
+| repair | `true` | lists the bucket first, sends only what is missing — makes a re-run cheap |
+| uploadUnchanged | `false` | `true` rebuilds each revision's prefix in full |
+| downloadCache | `true` | fetches a raw cache from OpenRS2 when models need one that is gone |
+| dryRun | `false` | report what would go up, contact nothing |
+
+It starts `openrune-publishcdn@<instance>` and returns. Sprite and texture bytes come out of
+PostgreSQL and meshes out of the raw cache, so nothing is re-decoded and no revision changes state —
+safe to run against a live API. It reports on the ingestion page the same way the backfill's upload
+phase does, per revision with a file count.
+
+```bash
+journalctl -u openrune-publishcdn@osrs -f
+systemctl stop openrune-publishcdn@osrs
+```
+
+The same thing locally, when you have a database to hand:
+`./gradlew publishCdn -PtoolArgs="from=225 to=241 repair=true downloadCache=true"`.
 
 ## Instances
 

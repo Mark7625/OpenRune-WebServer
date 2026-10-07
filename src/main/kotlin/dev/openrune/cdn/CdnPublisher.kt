@@ -90,12 +90,31 @@ class CdnPublisher(
     )
 
     /**
-     * Coarse progress for the UI. The underlying uploaders report at phase boundaries rather than
-     * per object, so this is "which phase, and how far through the three of them" — enough for a
-     * bar that moves, without threading a counter through every upload path.
+     * Live progress for the UI, one call per object PUT.
+     *
+     * A revision's upload is thousands of small objects and the slowest part of an import, so a
+     * phase name alone leaves the dashboard sitting on "uploading sprites" for minutes with no way
+     * to tell a slow upload from a stuck one. [done] / [total] are within [stage]; [percent] is the
+     * whole revision's upload, so the two can drive a file counter and a bar from one callback.
      */
+    class CdnProgress(
+        val rev: Int,
+        /** Asset kind being sent: sprites, textures, models, items, objects, or done. */
+        val stage: String,
+        val done: Int,
+        /** Objects [stage] will send in total. 0 before the uploader has filtered out what is already up. */
+        val total: Int,
+        val percent: Int,
+    ) {
+        val label: String get() = when {
+            stage == CdnPublisher.DONE -> "CDN upload complete for rev $rev"
+            total <= 0 -> "Uploading $stage for rev $rev"
+            else -> "Uploading $stage for rev $rev — $done/$total"
+        }
+    }
+
     fun interface StageListener {
-        fun onStage(label: String, percent: Int)
+        fun onStage(progress: CdnProgress)
     }
 
     fun publish(
@@ -103,7 +122,7 @@ class CdnPublisher(
         options: Options = Options(),
         sourceCacheId: Int? = null,
         onProgress: (String) -> Unit = { logger.info { it } },
-        onStage: StageListener = StageListener { _, _ -> },
+        onStage: StageListener = StageListener { },
     ): CdnPublishReport {
         if (!options.dryRun && !cdn.canUpload) {
             return CdnPublishReport(rev, skipped = "CDN upload not configured (set OPENRUNE_CDN_BUCKET)")
@@ -127,8 +146,14 @@ class CdnPublisher(
         val textureSetChanged = spriteSetChanged ||
             entities.setChangedAt(game.type(ConfigDiffType.TEXTURES.fileName), rev)
 
+        // Each kind owns a slice of the bar; within its slice the object counter drives the fill.
+        fun report(stage: String, from: Int, to: Int, done: Int, total: Int) {
+            val percent = if (total <= 0) from else from + ((to - from).toLong() * done / total).toInt()
+            onStage.onStage(CdnProgress(rev, stage, done, total, percent.coerceIn(0, 100)))
+        }
+
         if (wantSprites) {
-            onStage.onStage("Uploading ${sprites.size} sprites for rev $rev", 5)
+            report("sprites", SPRITES_FROM, TEXTURES_FROM, 0, 0)
             if (options.dryRun) {
                 onProgress("dryRun: rev $rev would upload ${sprites.size} sprites + sprites.zip")
             } else {
@@ -148,6 +173,7 @@ class CdnPublisher(
                         uploadOnly = changed,
                         uploadZip = options.uploadUnchanged || spriteSetChanged,
                         onProgress = onProgress,
+                        onCount = { done, total -> report("sprites", SPRITES_FROM, TEXTURES_FROM, done, total) },
                     )
                     spriteCount = result.uploaded
                     spriteFailures = result.failedIds
@@ -163,13 +189,15 @@ class CdnPublisher(
             if (!options.uploadUnchanged && !textureSetChanged) {
                 onProgress("CDN: rev $rev textures.zip unchanged, not re-uploaded")
             } else {
-                onStage.onStage("Uploading textures.zip for rev $rev", 45)
+                // One zip, so the counter is 0/1 then 1/1 rather than a per-object climb.
+                report("textures", TEXTURES_FROM, MODELS_FROM, 0, 1)
                 val textures = loadTextures(rev, sprites)
                 if (options.dryRun) {
                     onProgress("dryRun: rev $rev would upload textures.zip (${textures.size} textures)")
                 } else {
                     texturesZip = SpriteCdn.publishRevisionTextures(cdn, gameType, rev, textures, onProgress = onProgress)
                 }
+                report("textures", TEXTURES_FROM, MODELS_FROM, 1, 1)
             }
         }
 
@@ -191,13 +219,14 @@ class CdnPublisher(
                         onProgress("CDN: rev $rev has ${changed.size} changed models of ${all.size}")
                         all.filter { it in changed }
                     }
-                    onStage.onStage("Uploading ${ids.size} models for rev $rev", 55)
+                    report("models", MODELS_FROM, ITEMS_FROM, 0, ids.size)
                     if (options.dryRun) {
                         onProgress("dryRun: rev $rev would upload ${ids.size} model .dat files")
                     } else {
                         val result = ModelCdn.publishRevisionModels(
                             cdn, gameType, rev, ids, { id -> cache.data(MODELS, id) },
                             onlyMissing = options.onlyMissing, onProgress = onProgress,
+                            onCount = { done, total -> report("models", MODELS_FROM, ITEMS_FROM, done, total) },
                         )
                         modelCount = result.uploaded
                         modelFailures = result.failedIds
@@ -218,7 +247,9 @@ class CdnPublisher(
             if (kind !in options.kinds) return@forEach
             val (typeKey, folder) = spec
             val type = game.typeOrNull(typeKey) ?: return@forEach
-            onStage.onStage("Uploading $folder images for rev $rev", if (kind == CdnKind.ITEMS) 70 else 85)
+            val from = if (kind == CdnKind.ITEMS) ITEMS_FROM else OBJECTS_FROM
+            val to = if (kind == CdnKind.ITEMS) OBJECTS_FROM else 100
+            report(folder, from, to, 0, 0)
             val wanted = if (options.uploadUnchanged) null else entities.changedAt(type, rev).toSet()
             val images = LinkedHashMap<Int, ByteArray>()
             entities.forEachBlob(type, rev) { id, bytes ->
@@ -228,17 +259,33 @@ class CdnPublisher(
             if (options.dryRun) {
                 onProgress("dryRun: rev $rev would upload ${images.size} $folder images")
             } else {
-                val failed = SpriteCdn.publishImages(cdn, gameType, rev, folder, images, onProgress = onProgress)
+                val failed = SpriteCdn.publishImages(
+                    cdn, gameType, rev, folder, images, onProgress = onProgress,
+                    onCount = { done, total -> report(folder, from, to, done, total) },
+                )
                 imageCount += images.size - failed.size
                 imageFailures = imageFailures + failed
             }
         }
 
-        onStage.onStage("CDN upload complete for rev $rev", 100)
+        report(DONE, 100, 100, 1, 1)
         return CdnPublishReport(
             rev, spriteCount, spriteFailures, texturesZip, modelCount, modelFailures,
             images = imageCount, imagesFailed = imageFailures,
         )
+    }
+
+    companion object {
+        /** Terminal [CdnProgress.stage]: the revision's whole upload is finished. */
+        const val DONE = "done"
+
+        // Each kind's share of the bar, roughly proportional to how long it takes. Sprites are the
+        // bulk of a revision's objects; the two zips are one PUT each.
+        private const val SPRITES_FROM = 0
+        private const val TEXTURES_FROM = 45
+        private const val MODELS_FROM = 55
+        private const val ITEMS_FROM = 75
+        private const val OBJECTS_FROM = 88
     }
 
     private fun loadSprites(rev: Int): Map<Int, ByteArray> {

@@ -69,16 +69,20 @@ fun main(args: Array<String>) {
                 // Ascending for the same reason the imports are: only the assets that changed at a
                 // revision are uploaded, and an unchanged one resolves to an earlier revision's
                 // object — which has to already be on the CDN for that link to answer.
-                uploaded.sorted().forEach { rev ->
+                val order = uploaded.sorted()
+                backfill.startCdn(gameId, order)
+                order.forEach { rev ->
                     // Recorded as a run so the dashboard shows this phase the same way it shows an
                     // import; without it the page would look idle for the length of the upload.
                     val runId = platform.ingestRevisions.startRun(gameId, rev)
                     platform.ingestRevisions.updateRunProgress(runId, "CDN", 0, "Uploading assets for rev $rev")
                     try {
-                        platform.publishCdnFor(rev) { p ->
-                            platform.ingestRevisions.updateRunProgress(runId, "CDN", p.percent, p.message)
-                        }
+                        platform.publishCdnFor(
+                            rev,
+                            onCdn = CdnProgressRecorder(backfill, platform.ingestRevisions, gameId, rev, runId),
+                        )
                     } finally {
+                        backfill.completeCdn(gameId, rev)
                         platform.ingestRevisions.updateRun(runId, stage = "READY", status = "READY", finished = true)
                     }
                 }

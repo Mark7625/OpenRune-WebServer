@@ -241,12 +241,13 @@ jobs:
             OPENRUNE_CDN_ENABLED=true
             EOF
             chmod 600 "${DEPLOY_DIR}/openrune.env"
-            chmod 700 "${DEPLOY_DIR}/ingest.sh" "${DEPLOY_DIR}/backfill.sh"
+            chmod 700 "${DEPLOY_DIR}/ingest.sh" "${DEPLOY_DIR}/backfill.sh" "${DEPLOY_DIR}/publish-cdn.sh"
 
             install -m 644 "${DEPLOY_DIR}/openrune-webserver@.service" /etc/systemd/system/
             install -m 644 "${DEPLOY_DIR}/openrune-ingest@.service" /etc/systemd/system/
             install -m 644 "${DEPLOY_DIR}/openrune-ingest@.timer" /etc/systemd/system/
             install -m 644 "${DEPLOY_DIR}/openrune-backfill@.service" /etc/systemd/system/
+            install -m 644 "${DEPLOY_DIR}/openrune-publishcdn@.service" /etc/systemd/system/
             install -m 644 "${DEPLOY_DIR}/cloudflared.service" /etc/systemd/system/
             systemctl daemon-reload
 

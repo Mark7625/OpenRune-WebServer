@@ -2,6 +2,7 @@ package dev.openrune.tools
 
 import dev.openrune.cdn.CdnKind
 import dev.openrune.cdn.CdnPublisher
+import dev.openrune.store.BackfillRepository
 import mu.KotlinLogging
 
 private val logger = KotlinLogging.logger {}
@@ -12,6 +13,11 @@ private val logger = KotlinLogging.logger {}
  * Sprite and texture bytes come from PostgreSQL, so they need no cache on disk. Raw model `.dat`
  * meshes come from the revision's raw cache; pass `downloadCache=true` to fetch it from OpenRS2
  * when it is no longer on disk.
+ *
+ * Nothing is imported and no revision changes state, which is what makes this safe to run against a
+ * live API — and what makes it the thing to reach for when a backfill's imports landed but its
+ * upload phase did not. Progress is written to the `backfill` row's `cdn_*` columns and to an
+ * `ingest_run` per revision, so the ingestion page shows it the same way it shows an import.
  *
  * Flags:
  * ```
@@ -51,19 +57,50 @@ fun main(args: Array<String>) {
                 "dryRun=${options.dryRun} revs=$revs"
         }
 
+        // A dry run contacts nothing and finishes in seconds, so there is no progress worth showing
+        // and no reason to put a job on the dashboard.
+        val gameId = platform.game.game.id
+        val backfill = if (options.dryRun) null else BackfillRepository(platform.db.ingest)
+        backfill?.startCdnOnly(gameId, revs)
+
         var failed = 0
-        for (rev in revs) {
-            val sourceCacheId = platform.revisions.get(platform.game.game.id, rev)?.sourceCacheId
-                ?: platform.discovery.build(rev)?.cacheId
-            // One unreachable revision must not abort the batch; report it and continue.
-            val report = runCatching {
-                platform.cdnPublisher.publish(rev, options, sourceCacheId, onProgress = { msg -> logger.info { msg } })
-            }.getOrElse { e ->
-                logger.error(e) { "rev $rev: CDN publish failed" }
-                null
+        try {
+            for (rev in revs) {
+                val sourceCacheId = platform.revisions.get(gameId, rev)?.sourceCacheId
+                    ?: platform.discovery.build(rev)?.cacheId
+                // Recorded as a run so the ingestion page shows this the same way it shows an import.
+                val runId = backfill?.let {
+                    platform.ingestRevisions.startRun(gameId, rev).also { id ->
+                        platform.ingestRevisions.updateRunProgress(id, "CDN", 0, "Uploading assets for rev $rev")
+                    }
+                }
+                // One per revision: the recorder holds the throttle state, so a fresh one per tick
+                // would write on every object.
+                val recorder = if (backfill != null && runId != null) {
+                    CdnProgressRecorder(backfill, platform.ingestRevisions, gameId, rev, runId)
+                } else {
+                    null
+                }
+                // One unreachable revision must not abort the batch; report it and continue.
+                val report = runCatching {
+                    platform.cdnPublisher.publish(
+                        rev, options, sourceCacheId,
+                        onProgress = { msg -> logger.info { msg } },
+                        onStage = { p -> recorder?.invoke(p) },
+                    )
+                }.getOrElse { e ->
+                    logger.error(e) { "rev $rev: CDN publish failed" }
+                    null
+                }
+                if (runId != null) {
+                    backfill?.completeCdn(gameId, rev)
+                    platform.ingestRevisions.updateRun(runId, stage = "READY", status = "READY", finished = true)
+                }
+                if (report == null || !report.ok) failed++
+                report?.let { logger.info { it.toString() } }
             }
-            if (report == null || !report.ok) failed++
-            report?.let { logger.info { it.toString() } }
+        } finally {
+            backfill?.finishCdnOnly(gameId)
         }
         logger.info { "Done. ${revs.size} revision(s), $failed with failures." }
         if (failed > 0) kotlin.system.exitProcess(2)

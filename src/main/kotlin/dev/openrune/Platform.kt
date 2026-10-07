@@ -178,16 +178,31 @@ class Platform(
      * everything it needs is already in PostgreSQL or the raw cache on disk. Never throws — a CDN
      * outage must not turn a published revision into a failed one.
      */
-    fun publishCdnFor(rev: Int, progress: (IngestionProgress) -> Unit = {}) = publishCdn(rev, progress)
+    /**
+     * [onCdn] sees the per-object detail (which asset kind, how many of its files are up); [progress]
+     * sees the same thing flattened into the stage/percent/message an `ingest_run` row can hold.
+     */
+    fun publishCdnFor(
+        rev: Int,
+        progress: (IngestionProgress) -> Unit = {},
+        onCdn: (CdnPublisher.CdnProgress) -> Unit = {},
+    ) = publishCdn(rev, progress, onCdn)
 
-    private fun publishCdn(rev: Int, progress: (IngestionProgress) -> Unit) {
+    private fun publishCdn(
+        rev: Int,
+        progress: (IngestionProgress) -> Unit,
+        onCdn: (CdnPublisher.CdnProgress) -> Unit = {},
+    ) {
         if (!config.spriteCdn.canUpload) return
         try {
             progress(IngestionProgress(rev, "CDN", 0, "Publishing sprites, textures and models to CDN"))
             val report = cdnPublisher.publish(
                 rev,
                 onProgress = { msg -> logger.info { msg } },
-                onStage = { label, percent -> progress(IngestionProgress(rev, "CDN", percent, label)) },
+                onStage = { p ->
+                    onCdn(p)
+                    progress(IngestionProgress(rev, "CDN", p.percent, p.label))
+                },
             )
             if (!report.ok) metrics.increment("ingest.cdn.failed")
             logger.info { "rev $rev: CDN publish $report" }
