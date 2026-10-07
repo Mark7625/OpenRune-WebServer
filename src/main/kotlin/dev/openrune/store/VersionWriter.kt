@@ -105,15 +105,23 @@ class VersionWriter(private val dataSource: DataSource) {
             nextRev, gameId, typeId, nextRev, nextRev,
         ) { it.getInt(1) } ?: 0
 
+        // The upper bound is the earlier of [nextRev] and the entity's own next recorded state, so a
+        // new version can never be opened across a row that already exists. [nextRev] alone is derived
+        // from `revision.has_data`, which an import killed mid-type leaves behind as false even though
+        // its rows are committed; bounding per entity as well keeps the ranges disjoint regardless.
+        // LEAST ignores NULLs, so the newest revision with nothing after it still gets an open range.
         val inserted = c.update(
             """INSERT INTO entity_version (game_id, type_id, entity_id, valid_from, valid_to, payload_hash, blob_hash, name, ingest_rev)
-               SELECT ?, ?, s.entity_id, ?, ?::int, s.payload_hash, s.blob_hash, s.name, ?
+               SELECT ?, ?, s.entity_id, ?,
+                      LEAST(?::int, (SELECT min(n.valid_from) FROM entity_version n
+                                     WHERE n.game_id = ? AND n.type_id = ? AND n.entity_id = s.entity_id AND n.valid_from > ?)),
+                      s.payload_hash, s.blob_hash, s.name, ?
                FROM stage_entity s
                WHERE NOT EXISTS (
                    SELECT 1 FROM entity_version v
                    WHERE v.game_id = ? AND v.type_id = ? AND v.entity_id = s.entity_id
                      AND v.valid_from < ? AND (v.valid_to IS NULL OR v.valid_to > ?) AND v.payload_hash = s.payload_hash)""",
-            gameId, typeId, rev, nextRev, rev, gameId, typeId, rev, rev,
+            gameId, typeId, rev, nextRev, gameId, typeId, rev, rev, gameId, typeId, rev, rev,
         )
 
         c.update(
@@ -157,9 +165,16 @@ class VersionWriter(private val dataSource: DataSource) {
                                AND cp.ingest_rev = ? AND cp.valid_from > ?)""",
             rev, rev, gameId, rev, rev, rev,
         )
+        // Everything else rev closed goes back to where the next state of that entity begins, bounded
+        // by [nextRev] for the same reason the insert above is (see writeType).
         c.update(
-            "UPDATE entity_version SET valid_to = ?::int, closed_by_rev = NULL WHERE game_id = ? AND closed_by_rev = ?",
-            nextRev, gameId, rev,
+            """UPDATE entity_version v
+               SET valid_to = LEAST(?::int, (SELECT min(n.valid_from) FROM entity_version n
+                                             WHERE n.game_id = v.game_id AND n.type_id = v.type_id
+                                               AND n.entity_id = v.entity_id AND n.valid_from > ? AND n.ingest_rev <> ?)),
+                   closed_by_rev = NULL
+               WHERE v.game_id = ? AND v.closed_by_rev = ?""",
+            nextRev, rev, rev, gameId, rev,
         )
         c.update("DELETE FROM entity_version WHERE game_id = ? AND ingest_rev = ?", gameId, rev)
     }

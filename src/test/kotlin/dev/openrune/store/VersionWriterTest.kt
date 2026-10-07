@@ -122,6 +122,25 @@ class VersionWriterTest {
     }
 
     @Test
+    fun `an insert never spans rows the caller's nextRev does not account for`() {
+        val g = GameRegistry(db.ingest).register(GameType.RUNESCAPE, CacheEnvironment.BETA, listOf(EntityTypeDef("things", EntityKind.CONFIG, "Things")))
+        val t = g.type("things")
+        val q = EntityQueries(db.api, g)
+        fun w(rev: Int, next: Int?, vararg s: EntitySnapshot) = writer.writeType(g.game.id, t.id, rev, next, s.iterator())
+        fun state(rev: Int) = q.page(t, rev, 0, 10, withPayload = true).rows.associate { it.id to it.payload!!.asJsonObject["x"].asInt }
+
+        // rev 5's rows are committed but its revision no longer reports `has_data` — what an import
+        // killed mid-type leaves behind — so the caller passes next = null while writing rev 1.
+        w(5, null, snap(1, 5), snap(2, 5))
+        w(1, null, snap(1, 1), snap(3, 1))
+
+        assertEquals(listOf(1 to 5, 5 to null), q.history(t, 1).map { it.validFrom to it.validTo })
+        assertEquals(listOf(1 to null), q.history(t, 3).map { it.validFrom to it.validTo })
+        assertEquals(mapOf(1 to 1, 3 to 1), state(1))
+        assertEquals(mapOf(1 to 5, 2 to 5, 3 to 1), state(5))
+    }
+
+    @Test
     fun `identical content across entities shares one payload row`() {
         val g = GameRegistry(db.ingest).register(GameType.RUNESCAPE, CacheEnvironment.LIVE, listOf(EntityTypeDef("things", EntityKind.CONFIG, "Things")))
         val t = g.type("things")

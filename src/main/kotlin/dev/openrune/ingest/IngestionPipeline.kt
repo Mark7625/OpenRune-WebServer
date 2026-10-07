@@ -163,14 +163,25 @@ class IngestionPipeline(
                     throw IngestionException("Validation failed for $key at rev $rev: decoded ${result.total} entities, stored $stored")
                 }
             }
-            val overlaps = c.queryOne(
-                """SELECT count(*) FROM entity_version a
+            val overlapQuery =
+                """FROM entity_version a
                    JOIN entity_version b ON b.game_id = a.game_id AND b.type_id = a.type_id AND b.entity_id = a.entity_id AND b.valid_from > a.valid_from
                    WHERE a.game_id = ? AND (a.ingest_rev = ? OR a.closed_by_rev = ? OR b.ingest_rev = ? OR b.closed_by_rev = ?)
-                     AND (a.valid_to IS NULL OR a.valid_to > b.valid_from)""",
-                gameId, rev, rev, rev, rev,
-            ) { it.getLong(1) } ?: 0L
-            if (overlaps > 0) throw IngestionException("Validation failed at rev $rev: $overlaps overlapping version ranges")
+                     AND (a.valid_to IS NULL OR a.valid_to > b.valid_from)"""
+            val overlaps = c.queryOne("SELECT count(*) $overlapQuery", gameId, rev, rev, rev, rev) { it.getLong(1) } ?: 0L
+            if (overlaps > 0) {
+                // Name the rows: an overlap is almost always a revision whose rows are committed while
+                // `revision.has_data` says otherwise, and the sample points straight at that revision.
+                val sample = c.query(
+                    "SELECT a.type_id, a.entity_id, a.valid_from, a.valid_to, b.valid_from, b.valid_to $overlapQuery ORDER BY a.type_id, a.entity_id LIMIT 5",
+                    gameId, rev, rev, rev, rev,
+                ) { rs ->
+                    "type=${rs.getInt(1)} id=${rs.getInt(2)} [${rs.getInt(3)},${rs.getObject(4) ?: "∞"}) vs [${rs.getInt(5)},${rs.getObject(6) ?: "∞"})"
+                }
+                throw IngestionException(
+                    "Validation failed at rev $rev: $overlaps overlapping version ranges; e.g. ${sample.joinToString("; ")}"
+                )
+            }
             val missingPayloads = c.queryOne(
                 """SELECT count(*) FROM entity_version v LEFT JOIN entity_payload p ON p.hash = v.payload_hash
                    WHERE v.game_id = ? AND v.ingest_rev = ? AND p.hash IS NULL""",
