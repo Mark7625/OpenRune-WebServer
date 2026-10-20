@@ -195,11 +195,20 @@ comfortably inside Cloudflare's ~100s idle timeout — and the tunnel config set
 published revision, and ingests whatever it finds. No new cache is a no-op that exits 0, which is
 the normal outcome for most of the seven firings.
 
-**The API is never stopped or restarted by it.** Ingestion runs in its own process with
-`OPENRUNE_INGEST_ENABLED=false` on the API, holds a `pg_advisory_lock` so two runs cannot overlap,
-and publishes nothing unless the whole revision imported cleanly. The API only reads published
-revisions, and picks a new one up within a second via `publish_stamp` — so there is nothing to
-restart after a successful import, and nothing to recover after a failed one.
+**The timer is no longer the only thing that imports.** `OPENRUNE_INGEST_ENABLED` is ignored and
+gone from the unit file: the API polls and imports as well, and the admin page can start an
+import, queue a cache link or re-ingest an entity type in the API process. The check used to keep
+imports out of the API, but it disabled those buttons with them.
+
+**The API is still never stopped or restarted by an import.** Every importer — the timer and the
+API — holds the same `pg_advisory_lock`, so two can never run at once, and nothing is published
+unless the whole revision imported cleanly. A failed import rolls back and leaves the published
+set untouched; readers pick a new revision up within a second via `publish_stamp`. So there is
+nothing to restart after a successful import and nothing to recover after a failed one.
+
+What the API no longer gets for free is isolation: an import running in the API process competes
+with it for heap and CPU, and `ingest.sh` runs with `-Xmx8G` for a reason. Check `OPENRUNE_HEAP`
+is sized for an import before relying on the in-process path for a full revision.
 
 On failure the script posts the exit code and the last 20 log lines to the Discord webhook and
 exits 0, so the timer unit stays healthy and the next week's run is unaffected.

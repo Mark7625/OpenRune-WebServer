@@ -5,19 +5,10 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="b4394631-f700-4b5a-8ccd-b2beedc4ce63" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/build.gradle.kts" beforeDir="false" afterPath="$PROJECT_DIR$/build.gradle.kts" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/ARCHITECTURE.md" beforeDir="false" afterPath="$PROJECT_DIR$/docs/ARCHITECTURE.md" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.env.example" beforeDir="false" afterPath="$PROJECT_DIR$/.env.example" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/deploy/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/deploy/README.md" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/App.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/App.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/Platform.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/Platform.kt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/api/AdminRoutes.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/api/AdminRoutes.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/db/Database.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/db/Database.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/ingest/IngestionWorker.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/ingest/IngestionWorker.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/ingest/RawCacheStore.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/ingest/RawCacheStore.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/ingest/RevisionDiscovery.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/ingest/RevisionDiscovery.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/store/RevisionRepository.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/store/RevisionRepository.kt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/tools/IngestMain.kt" beforeDir="false" afterPath="$PROJECT_DIR$/src/main/kotlin/dev/openrune/tools/IngestMain.kt" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />

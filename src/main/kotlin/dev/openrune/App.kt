@@ -37,31 +37,31 @@ class App(private val config: ServerConfig, dbConfig: DatabaseConfig) : AutoClos
         sourceCacheId = config.cacheID,
     )
 
-    private val ingestEnabled = envOrProp("OPENRUNE_INGEST_ENABLED")?.lowercase() !in setOf("0", "false", "no", "off")
-
-    private val worker: IngestionWorker? = if (ingestEnabled) {
-        IngestionWorker(
-            gameId = platform.game.game.id,
-            repository = platform.ingestRevisions,
-            discovery = platform.discovery,
-            runRevision = { rev, progress -> platform.ingestRevision(rev, progress) },
-            pollIntervalMs = envOrProp("OPENRUNE_INGEST_POLL_MS")?.toLongOrNull() ?: 60_000,
-            maxAttempts = envOrProp("OPENRUNE_INGEST_MAX_ATTEMPTS")?.toIntOrNull() ?: 3,
-            minRevision = minRevision(),
-            onProgress = ::onProgress,
-        )
-    } else null
+    /**
+     * Ingestion always runs here. `OPENRUNE_INGEST_ENABLED` used to gate this, but it is ignored
+     * for now: the deployed API set it false, which left the admin page's buttons dead on exactly
+     * the deployment they exist for. Imports still take the cross-process `pg_advisory_lock`, so
+     * the scheduled job and this worker cannot overlap.
+     */
+    private val worker: IngestionWorker = IngestionWorker(
+        gameId = platform.game.game.id,
+        repository = platform.ingestRevisions,
+        discovery = platform.discovery,
+        runRevision = { rev, progress -> platform.ingestRevision(rev, progress) },
+        pollIntervalMs = envOrProp("OPENRUNE_INGEST_POLL_MS")?.toLongOrNull() ?: 60_000,
+        maxAttempts = envOrProp("OPENRUNE_INGEST_MAX_ATTEMPTS")?.toIntOrNull() ?: 3,
+        minRevision = minRevision(),
+        onProgress = ::onProgress,
+    )
 
     /**
      * Operator-triggered repair pass. Shares nothing with [worker] except the per-game advisory
      * lock it takes around each revision, so a new release still imports while it runs.
      */
-    private val reingest: TypeReingestRunner? = if (ingestEnabled) {
-        TypeReingestRunner { typeKey, from, report, isCancelled ->
-            platform.reingestType(typeKey, from, report, isCancelled)
-            onReingestFinished()
-        }
-    } else null
+    private val reingest = TypeReingestRunner { typeKey, from, report, isCancelled ->
+        platform.reingestType(typeKey, from, report, isCancelled)
+        onReingestFinished()
+    }
 
     private val zips: SpriteZipService = SpriteZipService(
         api,
@@ -77,7 +77,7 @@ class App(private val config: ServerConfig, dbConfig: DatabaseConfig) : AutoClos
             platform.discovery,
             envOrProp("OPENRUNE_ADMIN_TOKEN"),
             System.currentTimeMillis(),
-            addManualRevision = if (ingestEnabled) platform::addManualRevision else null,
+            addManualRevision = platform::addManualRevision,
             reingest = reingest,
         ),
         zips,
@@ -117,7 +117,7 @@ class App(private val config: ServerConfig, dbConfig: DatabaseConfig) : AutoClos
         } else {
             logger.info { "Serving ${platform.game.game.slug}: ${platform.catalog.published().size} published revisions, latest $latest" }
         }
-        worker?.start()
+        worker.start()
     }
 
     /** Lowest revision the worker ingests automatically: configured, else what is published, else the configured cache id's revision. */
@@ -134,8 +134,8 @@ class App(private val config: ServerConfig, dbConfig: DatabaseConfig) : AutoClos
     override fun close() {
         ingestionWatch.close()
         hot.close()
-        reingest?.close()
-        worker?.close()
+        reingest.close()
+        worker.close()
         zips.close()
         server.stop()
         platform.close()

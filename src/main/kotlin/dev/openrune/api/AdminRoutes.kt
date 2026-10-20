@@ -35,11 +35,10 @@ class AdminContext(
     val startedAt: Long,
     /**
      * Files a pasted cache link and answers with the revision it was filed under
-     * ([dev.openrune.Platform.addManualRevision]). Null in a deployment without ingestion, where
-     * there is nothing to hand the link to.
+     * ([dev.openrune.Platform.addManualRevision]). Null only where no pipeline was wired up.
      */
     val addManualRevision: ((url: String, rev: Int?) -> Int)? = null,
-    /** Repair pass that rewrites one entity type across published revisions; null without ingestion. */
+    /** Repair pass that rewrites one entity type across published revisions. */
     val reingest: TypeReingestRunner? = null,
 )
 
@@ -228,7 +227,7 @@ fun Route.adminRoutes(ctx: ApiContext, admin: AdminContext) {
 
         post("/revisions/manual") {
             if (!call.authorized()) return@post
-            val add = admin.addManualRevision ?: notFound("Ingestion is disabled on this server")
+            val add = admin.addManualRevision ?: notFound("This server was built without the ingestion pipeline")
             // A browser posts JSON; a curl one-liner is easier with query parameters. Accept both,
             // treating an unreadable body as absent so the query parameters still get a say.
             val body = if (call.request.contentType().match(ContentType.Application.Json)) {
@@ -264,7 +263,7 @@ fun Route.adminRoutes(ctx: ApiContext, admin: AdminContext) {
 
         post("/reingest") {
             if (!call.authorized()) return@post
-            val runner = admin.reingest ?: notFound("Ingestion is disabled on this server")
+            val runner = admin.reingest ?: notFound("This server was built without the ingestion pipeline")
             val typeKey = call.request.queryParameters["type"]?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
                 ?: ConfigDiffType.TEXTURES.fileName
             if (ctx.game.typeOrNull(typeKey) == null) badRequest("Unknown entity type '$typeKey'")
@@ -277,7 +276,7 @@ fun Route.adminRoutes(ctx: ApiContext, admin: AdminContext) {
 
         post("/reingest/cancel") {
             if (!call.authorized()) return@post
-            val runner = admin.reingest ?: notFound("Ingestion is disabled on this server")
+            val runner = admin.reingest ?: notFound("This server was built without the ingestion pipeline")
             runner.cancel()
             call.respond(mapOf("status" to "cancelling"))
         }

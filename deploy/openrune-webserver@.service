@@ -15,9 +15,9 @@ WorkingDirectory=/opt/openrune-webserver
 # Shared secrets first, then the per-instance game/port, which may override.
 EnvironmentFile=/opt/openrune-webserver/openrune.env
 EnvironmentFile=/opt/openrune-webserver/instances/%i.env
-# Ingestion is driven by openrune-ingest@%i.timer in its own process, so a failed import can never
-# take the API down with it. Do not turn this on here.
-Environment=OPENRUNE_INGEST_ENABLED=false
+# No OPENRUNE_INGEST_ENABLED here: the server ignores it and always ingests, so setting it would
+# only mislead. openrune-ingest@%i.timer still imports in its own process; both it and the API
+# take the same pg_advisory_lock, so the two can never import at once.
 ExecStart=/usr/lib/jvm/java-17-openjdk-amd64/bin/java -Xmx${OPENRUNE_HEAP} -jar /opt/openrune-webserver/openrune-server.jar ${OPENRUNE_CACHE_ID} ${OPENRUNE_GAME} ${OPENRUNE_ENVIRONMENT} ${OPENRUNE_PORT}
 # `always`, not `on-failure`: an API that exits for any reason, cleanly or not, should come back.
 Restart=always
