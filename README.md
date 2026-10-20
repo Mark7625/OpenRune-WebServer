@@ -85,6 +85,10 @@ measurements: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 * Revisions are discovered on OpenRS2, ingested in the background and published atomically.
   The site keeps serving published revisions while a new one is processed; a failed revision
   is rolled back and retried, never half-visible.
+* A cache can also be queued **by link** instead of waiting for discovery — paste a `disk.zip`
+  URL into the Ingestion page, `POST /admin/revisions/manual`, or run
+  `./gradlew ingestRevisions -PtoolArgs="url=..."`. The revision number is read from the
+  OpenRS2 catalogue when the link is an OpenRS2 cache, and must be given with `rev=` otherwise.
 * `/status.revision` is the latest **published** revision. `/admin/*` exposes ingestion state,
   runs, metrics, database and memory information (token: `OPENRUNE_ADMIN_TOKEN`; without a
   token only loopback clients are allowed). The website shows it under Tools → Ingestion.
@@ -96,6 +100,10 @@ measurements: [docs/BENCHMARKS.md](docs/BENCHMARKS.md).
 ```bash
 # Ingest specific revisions from OpenRS2 (download, decode, import, validate, publish)
 ./gradlew ingestRevisions -PtoolArgs="revs=240,241"
+
+# Ingest a cache straight from a link, discovered or not (rev= only when it is not an OpenRS2 link)
+./gradlew ingestRevisions -PtoolArgs="url=https://archive.openrs2.org/caches/runescape/2746/disk.zip"
+./gradlew ingestRevisions -PtoolArgs="url=https://example.com/my-cache.zip rev=241"
 
 # Import existing legacy .bin history without re-downloading caches
 ./gradlew importLegacyBins -PtoolArgs="from=1 to=241"

@@ -1,18 +1,23 @@
 package dev.openrune.api
 
 import com.zaxxer.hikari.HikariDataSource
+import dev.openrune.cache.diff.ConfigDiffType
 import dev.openrune.db.Database
 import dev.openrune.db.query
 import dev.openrune.db.withConnection
 import dev.openrune.ingest.IngestionPipeline
 import dev.openrune.ingest.IngestionWorker
 import dev.openrune.ingest.RevisionDiscovery
+import dev.openrune.ingest.TypeReingestRunner
 import dev.openrune.model.RevisionStatus
 import dev.openrune.store.RevisionRow
+import io.ktor.http.ContentType
 import io.ktor.http.HttpStatusCode
 import io.ktor.server.application.ApplicationCall
 import io.ktor.server.application.call
+import io.ktor.server.request.contentType
 import io.ktor.server.request.header
+import io.ktor.server.request.receiveNullable
 import io.ktor.server.response.respond
 import io.ktor.server.routing.Route
 import io.ktor.server.routing.get
@@ -28,7 +33,18 @@ class AdminContext(
     val discovery: RevisionDiscovery?,
     val token: String?,
     val startedAt: Long,
+    /**
+     * Files a pasted cache link and answers with the revision it was filed under
+     * ([dev.openrune.Platform.addManualRevision]). Null in a deployment without ingestion, where
+     * there is nothing to hand the link to.
+     */
+    val addManualRevision: ((url: String, rev: Int?) -> Int)? = null,
+    /** Repair pass that rewrites one entity type across published revisions; null without ingestion. */
+    val reingest: TypeReingestRunner? = null,
 )
+
+/** Body of `POST /admin/revisions/manual`; both fields may also arrive as query parameters. */
+private class ManualLinkRequest(val url: String? = null, val rev: Int? = null)
 
 /**
  * Developer / operator endpoints under `/admin`. Gated by `OPENRUNE_ADMIN_TOKEN` (header
@@ -42,6 +58,12 @@ fun Route.adminRoutes(ctx: ApiContext, admin: AdminContext) {
         Triple("GET /admin/revisions", "Every revision with status, source cache id and metrics.", "/admin/revisions"),
         Triple("GET /admin/revisions/{rev}", "One revision plus its ingest run history.", "/admin/revisions/241"),
         Triple("POST /admin/revisions/{rev}/ingest", "Queue a revision for ingestion.", "/admin/revisions/241/ingest"),
+        Triple(
+            "POST /admin/revisions/manual",
+            "Queue a cache from a link instead of waiting for OpenRS2 discovery. JSON body or query: " +
+                "url (a disk.zip), rev (required unless the link is an OpenRS2 cache, whose id names the revision).",
+            "/admin/revisions/manual?url=https://archive.openrs2.org/caches/runescape/2746/disk.zip",
+        ),
         Triple("POST /admin/revisions/{rev}/unpublish", "Hide a published revision from the API.", "/admin/revisions/241/unpublish"),
         Triple("GET /admin/runs", "Recent ingest runs. Query: limit.", "/admin/runs?limit=30"),
         Triple("GET /admin/metrics", "Timers and counters: slowest endpoints and slow operations.", "/admin/metrics"),
@@ -49,6 +71,13 @@ fun Route.adminRoutes(ctx: ApiContext, admin: AdminContext) {
         Triple("GET /admin/memory", "Heap, threads and peak usage.", "/admin/memory"),
         Triple("GET /admin/cache", "Response cache entry count and hit rate.", "/admin/cache"),
         Triple("POST /admin/worker/{action}", "Pause or resume the background ingestion worker.", "/admin/worker/pause"),
+        Triple(
+            "POST /admin/reingest",
+            "Rewrite one entity type across every published revision, for a type whose decoder was wrong. " +
+                "Query: type (default textures), from (default 1). One run at a time; progress is on /admin/overview.",
+            "/admin/reingest?type=textures&from=1",
+        ),
+        Triple("POST /admin/reingest/cancel", "Stop the running re-ingest after the revision in flight.", "/admin/reingest/cancel"),
     ).forEach { (methodAndPath, description, example) ->
         val (method, path) = methodAndPath.split(' ', limit = 2)
         EndpointRegistry.registerEndpoint(method, path, description, "Admin", null, "application/json", listOf(example))
@@ -71,6 +100,8 @@ fun Route.adminRoutes(ctx: ApiContext, admin: AdminContext) {
 
     fun revisionJson(r: RevisionRow): Map<String, Any?> = mapOf(
         "rev" to r.rev,
+        "source" to r.source,
+        "sourceUrl" to r.sourceUrl,
         "status" to r.status.name,
         "stage" to r.stage,
         "published" to r.published,
@@ -111,6 +142,18 @@ fun Route.adminRoutes(ctx: ApiContext, admin: AdminContext) {
                                 )
                             },
                             "startedAt" to it.startedAt.toString(), "updatedAt" to it.updatedAt.toString(),
+                        )
+                    },
+                    "reingest" to admin.reingest?.status()?.let { r ->
+                        mapOf(
+                            "type" to r.typeKey, "from" to r.from,
+                            "total" to r.total, "done" to r.done, "percent" to r.percent,
+                            "rev" to r.rev, "stage" to r.stage, "message" to r.message,
+                            "entities" to r.entities,
+                            "changedRevs" to r.changedRevs,
+                            "failed" to r.failed.map { (rev, error) -> mapOf("rev" to rev, "error" to error) },
+                            "running" to r.running, "cancelled" to r.cancelled,
+                            "startedAt" to r.startedAt, "finishedAt" to r.finishedAt, "error" to r.error,
                         )
                     },
                     "workerPaused" to (admin.worker?.isPaused() ?: true),
@@ -183,11 +226,60 @@ fun Route.adminRoutes(ctx: ApiContext, admin: AdminContext) {
             call.respond(mapOf("rev" to rev, "status" to "queued"))
         }
 
+        post("/revisions/manual") {
+            if (!call.authorized()) return@post
+            val add = admin.addManualRevision ?: notFound("Ingestion is disabled on this server")
+            // A browser posts JSON; a curl one-liner is easier with query parameters. Accept both,
+            // treating an unreadable body as absent so the query parameters still get a say.
+            val body = if (call.request.contentType().match(ContentType.Application.Json)) {
+                runCatching { call.receiveNullable<ManualLinkRequest>() }.getOrNull()
+            } else {
+                null
+            }
+            val url = (body?.url ?: call.request.queryParameters["url"])?.trim().orEmpty()
+            if (url.isEmpty()) {
+                badRequest("A cache link is required, e.g. https://archive.openrs2.org/caches/runescape/2746/disk.zip")
+            }
+            val rev = body?.rev ?: call.intParam("rev")
+            // What this rejects is operator input: a link that is not a URL, a cache belonging to
+            // another game, or one whose revision cannot be worked out. Anything else is a real
+            // fault and goes out as a 500.
+            val resolved = try {
+                add(url, rev)
+            } catch (e: IllegalArgumentException) {
+                badRequest(e.message ?: "Could not queue that cache link")
+            } catch (e: IllegalStateException) {
+                badRequest(e.message ?: "Could not queue that cache link")
+            }
+            admin.worker?.wake()
+            call.respond(mapOf("rev" to resolved, "url" to url, "status" to "queued"))
+        }
+
         post("/revisions/{rev}/unpublish") {
             if (!call.authorized()) return@post
             val rev = call.parameters["rev"]?.toIntOrNull() ?: badRequest("Invalid rev")
             admin.pipeline.unpublish(rev)
             call.respond(mapOf("rev" to rev, "status" to "unpublished"))
+        }
+
+        post("/reingest") {
+            if (!call.authorized()) return@post
+            val runner = admin.reingest ?: notFound("Ingestion is disabled on this server")
+            val typeKey = call.request.queryParameters["type"]?.trim()?.lowercase()?.takeIf { it.isNotEmpty() }
+                ?: ConfigDiffType.TEXTURES.fileName
+            if (ctx.game.typeOrNull(typeKey) == null) badRequest("Unknown entity type '$typeKey'")
+            val from = (call.intParam("from") ?: 1).coerceAtLeast(1)
+            if (!runner.start(typeKey, from)) {
+                throw ApiError(HttpStatusCode.Conflict, mapOf("error" to "A re-ingest is already running"))
+            }
+            call.respond(mapOf("type" to typeKey, "from" to from, "status" to "started"))
+        }
+
+        post("/reingest/cancel") {
+            if (!call.authorized()) return@post
+            val runner = admin.reingest ?: notFound("Ingestion is disabled on this server")
+            runner.cancel()
+            call.respond(mapOf("status" to "cancelling"))
         }
 
         post("/worker/{action}") {

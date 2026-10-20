@@ -15,6 +15,10 @@ import javax.sql.DataSource
 data class RevisionRow(
     val gameId: Int,
     val rev: Int,
+    /** `openrs2` when discovery found it, `manual` when it was filed from a pasted cache link. */
+    val source: String,
+    /** The `disk.zip` a manual revision downloads; null when the OpenRS2 cache id names it. */
+    val sourceUrl: String?,
     val sourceCacheId: Int?,
     val sourceTimestamp: Instant?,
     val status: RevisionStatus,
@@ -86,6 +90,31 @@ class RevisionRepository(private val dataSource: DataSource) {
         ) > 0
     }
 
+    /**
+     * File a revision against a pasted cache link, creating the row if the revision is new. The
+     * link replaces whatever source the row had, so re-pasting a corrected link is the fix for a
+     * revision filed against the wrong one.
+     */
+    fun setManualSource(gameId: Int, rev: Int, url: String, sourceCacheId: Int?, sourceTimestamp: Instant?) {
+        dataSource.withConnection { c ->
+            c.update(
+                """INSERT INTO revision (game_id, rev, source, source_url, source_cache_id, source_timestamp, status)
+                   VALUES (?, ?, 'manual', ?, ?, ?, 'DISCOVERED')
+                   ON CONFLICT (game_id, rev) DO UPDATE SET
+                       source = 'manual',
+                       source_url = EXCLUDED.source_url,
+                       source_cache_id = COALESCE(EXCLUDED.source_cache_id, revision.source_cache_id),
+                       source_timestamp = COALESCE(EXCLUDED.source_timestamp, revision.source_timestamp),
+                       status = 'DISCOVERED',
+                       stage = NULL,
+                       error = NULL,
+                       attempts = 0,
+                       updated_at = now()""",
+                gameId, rev, url, sourceCacheId, sourceTimestamp?.let { Timestamp.from(it) },
+            )
+        }
+    }
+
     fun setSource(gameId: Int, rev: Int, sourceCacheId: Int?, sourceTimestamp: Instant?) {
         dataSource.withConnection { c ->
             c.update(
@@ -126,6 +155,21 @@ class RevisionRepository(private val dataSource: DataSource) {
                    published_at = now(), publish_stamp = ?, metrics = ?::jsonb, updated_at = now()
                    WHERE game_id = ? AND rev = ?""",
                 System.currentTimeMillis(), gson.toJson(metrics), gameId, rev,
+            )
+        }
+    }
+
+    /**
+     * Moves the stamp without changing what is published, for a rewrite of already published data.
+     * The stamp is the cache and ETag epoch, so every derived view and every browser copy is stale
+     * after this; without it a corrected entity type would stay invisible behind a 304.
+     */
+    fun bumpPublishStamp(gameId: Int) {
+        dataSource.withConnection { c ->
+            c.update(
+                """UPDATE revision SET publish_stamp = ?, updated_at = now()
+                   WHERE game_id = ? AND rev = (SELECT MAX(rev) FROM revision WHERE game_id = ? AND published)""",
+                System.currentTimeMillis(), gameId, gameId,
             )
         }
     }
@@ -213,6 +257,8 @@ class RevisionRepository(private val dataSource: DataSource) {
     private fun row(rs: ResultSet) = RevisionRow(
         gameId = rs.getInt("game_id"),
         rev = rs.getInt("rev"),
+        source = rs.getString("source") ?: "openrs2",
+        sourceUrl = rs.getString("source_url"),
         sourceCacheId = rs.getIntOrNull("source_cache_id"),
         sourceTimestamp = rs.getTimestamp("source_timestamp")?.toInstant(),
         status = RevisionStatus.valueOf(rs.getString("status")),

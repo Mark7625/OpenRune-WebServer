@@ -23,7 +23,7 @@ dependencies {
     implementation("io.ktor:ktor-server-cors:2.3.5")
     implementation("io.ktor:ktor-serialization-gson:2.3.5")
     implementation("io.ktor:ktor-server-status-pages:2.3.5")
-    implementation("dev.or2:all:3.0.5")
+    implementation("dev.or2:all:3.0.6")
     implementation("cc.ekblad:4koma:1.2.2-openrune")
 
     // JSON serialization with Gson
@@ -130,7 +130,7 @@ tasks {
         }
     }
 
-    registerTool("ingestRevisions", "dev.openrune.tools.IngestMainKt", "Ingest revisions from OpenRS2 into PostgreSQL: -PtoolArgs=\"revs=240,241\"")
+    registerTool("ingestRevisions", "dev.openrune.tools.IngestMainKt", "Ingest revisions into PostgreSQL from OpenRS2 (-PtoolArgs=\"revs=240,241\") or from a cache link (-PtoolArgs=\"url=https://archive.openrs2.org/caches/runescape/2746/disk.zip\")")
     registerTool("backfill", "dev.openrune.tools.BackfillMainKt", "Import older revisions newest first, yielding to new releases: -PtoolArgs=\"from=200 to=239\"", heap = "8G")
     registerTool("importLegacyBins", "dev.openrune.tools.ImportLegacyBinsMainKt", "Import legacy .bin revisions into PostgreSQL: -PtoolArgs=\"from=1 to=241\"", heap = "8G")
     registerTool("validateLegacy", "dev.openrune.tools.ValidateAgainstLegacyMainKt", "Compare PostgreSQL state and diffs against legacy .bin files: -PtoolArgs=\"revs=1,240,241\"", heap = "8G")

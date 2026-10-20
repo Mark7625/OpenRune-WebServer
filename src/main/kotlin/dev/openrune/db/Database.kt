@@ -150,6 +150,7 @@ object Migrations {
         "V003__ingest_progress.sql",
         "V004__backfill.sql",
         "V005__backfill_cdn.sql",
+        "V006__manual_source.sql",
     )
 
     fun apply(dataSource: DataSource) {

@@ -12,17 +12,26 @@ private val logger = KotlinLogging.logger {}
  * anything newer than what is already published and ingest that. `new=true` is what the scheduled
  * job runs; it exits 0 having done nothing when there is no new cache, so "nothing to do" is not
  * reported as a failure.
+ *
+ * `url=https://archive.openrs2.org/caches/runescape/2746/disk.zip` ingests one cache straight from
+ * a link, discovered or not. Add `rev=` when the link is not an OpenRS2 cache, since only the
+ * catalogue knows which build a cache is.
  */
 fun main(args: Array<String>) {
     val flags = ToolArgs(args)
     val wantsNew = flags.bool("new")
     val explicit = flags.ints("revs")
-    require(wantsNew || explicit.isNotEmpty()) { "revs=... or new=true is required" }
+    val link = flags["url"]
+    require(wantsNew || explicit.isNotEmpty() || link != null) { "revs=..., url=... or new=true is required" }
 
     openPlatform(flags).use { platform ->
         val gameId = platform.game.game.id
 
-        val revs = if (explicit.isNotEmpty()) explicit else {
+        // A pasted link is always an explicit request, so it re-ingests whether or not the
+        // revision is already published — `addManualRevision` unpublishes it for us.
+        val manual = link?.let { listOf(platform.addManualRevision(it, flags.int("rev"))) }.orEmpty()
+
+        val revs = if (manual.isNotEmpty() || explicit.isNotEmpty()) (manual + explicit).distinct() else {
             val latest = platform.revisions.latestPublished(gameId)
             // Only look past what is published; re-ingesting history is an explicit `revs=` job.
             platform.discovery.discover(minRev = (latest ?: 0) + 1)

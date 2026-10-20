@@ -186,6 +186,27 @@ class VersionWriter(private val dataSource: DataSource) {
         ) { true } ?: false
     }
 
+    /**
+     * Drops every version of one type across all revisions, so it can be rebuilt from scratch.
+     *
+     * [writeType] merges against what is already stored, so a type that was decoded wrongly cannot
+     * be corrected by writing over it — the stale rows still cover their revisions. Clearing the
+     * type first turns the rebuild into a plain ascending append.
+     *
+     * Payloads and blobs are left alone: they are content addressed and shared between types, and
+     * any that really are orphaned cost only disk.
+     */
+    fun deleteType(gameId: Int, typeId: Int): Int = dataSource.inTransaction { c ->
+        c.update("DELETE FROM entity_ref WHERE game_id = ? AND type_id = ?", gameId, typeId)
+        c.update("DELETE FROM entity_version WHERE game_id = ? AND type_id = ?", gameId, typeId)
+    }
+
+    fun countType(gameId: Int, typeId: Int): Int = dataSource.inTransaction { c ->
+        c.queryOne("SELECT count(*) FROM entity_version WHERE game_id = ? AND type_id = ?", gameId, typeId) {
+            it.getInt(1)
+        } ?: 0
+    }
+
     private class Covering(val payloadHash: ByteArray, val blobHash: ByteArray?)
 
     private class CopyCounts(val entities: Int)

@@ -7,10 +7,12 @@ import dev.openrune.db.DatabaseConfig
 import dev.openrune.ingest.IngestResult
 import dev.openrune.ingest.IngestionPipeline
 import dev.openrune.ingest.IngestionProgress
+import dev.openrune.ingest.ManualCacheLink
 import dev.openrune.ingest.RawCacheStore
 import dev.openrune.ingest.RenderReuse
 import dev.openrune.ingest.RevisionDiscovery
 import dev.openrune.ingest.RevisionSource
+import dev.openrune.ingest.TypeReingestReport
 import dev.openrune.ingest.osrs.OsrsRevisionSource
 import dev.openrune.metrics.Metrics
 import dev.openrune.model.OsrsEntityTypes
@@ -69,18 +71,146 @@ class Platform(
             ingestRevisions.discover(gameId, rev, build.cacheId, build.timestamp)
             ingestRevisions.get(gameId, rev)!!
         }
-        val cacheId = row.sourceCacheId ?: discovery.build(rev)?.cacheId ?: error("No OpenRS2 cache id for rev $rev")
+        // A revision filed from a pasted link downloads that link; everything else comes from the
+        // OpenRS2 catalogue. A link that happens to point at OpenRS2 still yields a cache id, which
+        // is all the XTEA keys need.
+        val link = row.sourceUrl
+        val cacheId = row.sourceCacheId
+            ?: link?.let { ManualCacheLink.openRs2CacheId(it) }
+            ?: if (link == null) discovery.build(rev)?.cacheId else null
+        if (link == null && cacheId == null) error("No OpenRS2 cache id for rev $rev")
         return ingestWith(rev, progress) {
             ingestRevisions.setStatus(gameId, rev, RevisionStatus.DOWNLOADING, "download")
             progress(IngestionProgress(rev, "DOWNLOADING", 0, "Downloading rev $rev"))
             val cachePath = metrics.time("ingest.download", { "rev $rev" }) {
-                rawCaches.ensure(rev, cacheId) { pct, msg -> progress(IngestionProgress(rev, "DOWNLOADING", pct, msg)) }
+                rawCacheFor(rev, link, cacheId) { pct, msg -> progress(IngestionProgress(rev, "DOWNLOADING", pct, msg)) }
             }
-            val xteas = if (OsrsRevisionSource.xteasAvailable(rev)) downloadXteas(cacheId) else null
+            val xteas = if (OsrsRevisionSource.xteasAvailable(rev)) xteasFor(rev, cacheId) else null
             Prepared({ OsrsRevisionSource(rev, cachePath, config.environment, xteas, renderReuse(rev)) }) {
                 if (cdn) publishCdn(rev, progress)
             }
         }
+    }
+
+    /**
+     * Files a cache link so the worker ingests it like any discovered revision, and returns the
+     * revision it was filed under. [rev] can be left out for an OpenRS2 link — the catalogue says
+     * which build that cache is — but is required for a link hosted anywhere else, because nothing
+     * in a raw cache states its own revision.
+     *
+     * An already published revision is unpublished first, exactly as re-ingesting one from the
+     * dashboard does: its rows are rolled back and it returns when the new import publishes.
+     */
+    fun addManualRevision(url: String, rev: Int? = null): Int {
+        val link = ManualCacheLink.normalise(url)
+        val cacheId = ManualCacheLink.openRs2CacheId(link)
+        val catalogued = cacheId?.let { runCatching { discovery.byCacheId(it) }.getOrNull() }
+        require(discovery.matchesStream(catalogued?.stream)) {
+            "OpenRS2 cache $cacheId is a ${catalogued?.stream} cache; this server serves ${game.game.slug}"
+        }
+        val resolved = rev ?: catalogued?.rev
+            ?: error("Cannot tell which revision $link holds; add the revision number alongside the link")
+        require(resolved > 0) { "Revision must be positive, got $resolved" }
+        val gameId = game.game.id
+        if (ingestRevisions.get(gameId, resolved)?.published == true) pipeline.unpublish(resolved)
+        ingestRevisions.setManualSource(gameId, resolved, link, cacheId, catalogued?.timestamp)
+        logger.info { "Filed cache link $link as ${game.game.slug} revision $resolved" }
+        return resolved
+    }
+
+    /** Extracted raw cache for [rev], downloading it from its pasted link or OpenRS2 id if absent. */
+    private fun rawCacheFor(rev: Int, link: String?, cacheId: Int?, progress: (Int, String) -> Unit): java.io.File =
+        if (link != null) rawCaches.ensureFrom(rev, link, progress) else rawCaches.ensure(rev, cacheId!!, progress)
+
+    /** The same, resolving the source from the revision row the way [ingestRevision] does. */
+    private fun rawCacheFor(rev: Int, progress: (Int, String) -> Unit): java.io.File {
+        val row = ingestRevisions.get(game.game.id, rev)
+        val link = row?.sourceUrl
+        val cacheId = row?.sourceCacheId
+            ?: link?.let { ManualCacheLink.openRs2CacheId(it) }
+            ?: if (link == null) discovery.build(rev)?.cacheId else null
+        if (link == null && cacheId == null) error("No cache source recorded for rev $rev")
+        return rawCacheFor(rev, link, cacheId, progress)
+    }
+
+    /**
+     * Re-decodes one entity type across every published revision from [from] upward and rewrites
+     * only that type, leaving every other type's rows untouched.
+     *
+     * This is the repair path for a decoder that was wrong: the revisions are already imported and
+     * published, so re-ingesting them whole would spend hours rewriting data that is already
+     * correct. It costs one raw cache download per revision instead.
+     *
+     * The type is cleared first and rebuilt in ascending order. That matters — [VersionWriter.writeType]
+     * merges against what is stored, so writing over stale rows would leave them covering their
+     * revisions. Each revision is then a plain append (`nextRev = null`), which is what keeps an
+     * unchanged entity on one open range rather than one row per revision.
+     *
+     * A cache this job downloads is deleted again once its revision is written, so a 240 revision
+     * pass does not leave 240 raw caches behind; caches that were already on disk are kept.
+     */
+    fun reingestType(
+        typeKey: String,
+        from: Int,
+        report: (TypeReingestReport) -> Unit,
+        isCancelled: () -> Boolean,
+    ) {
+        val gameId = game.game.id
+        val type = game.typeOrNull(typeKey) ?: error("Unknown entity type '$typeKey'")
+        val revs = catalog.published().filter { it >= from }
+        if (revs.isEmpty()) error("No published revisions at or above $from")
+
+        val changedRevs = ArrayList<Int>()
+        val failed = LinkedHashMap<Int, String>()
+        var done = 0
+        var entities = 0
+        fun tick(rev: Int?, stage: String, message: String) =
+            report(TypeReingestReport(revs.size, done, rev, stage, message, changedRevs.toList(), entities, LinkedHashMap(failed)))
+
+        tick(null, "CLEARING", "Removing the stored $typeKey rows before the rebuild")
+        val removed = pipeline.withGameLock { writer.deleteType(gameId, type.id) }
+        logger.info { "Re-ingest $typeKey: cleared $removed stored row(s), rebuilding over ${revs.size} revision(s) from ${revs.first()}" }
+
+        for (rev in revs) {
+            if (isCancelled()) {
+                logger.info { "Re-ingest $typeKey: cancelled before rev $rev" }
+                break
+            }
+            val keepCache = rawCaches.has(rev)
+            try {
+                tick(rev, "DOWNLOADING", "Fetching the rev $rev cache")
+                val cachePath = rawCacheFor(rev) { _, msg -> tick(rev, "DOWNLOADING", msg) }
+
+                tick(rev, "WRITING", "Decoding $typeKey for rev $rev")
+                // No xteas and no render reuse: both are for map regions and rendered images, and
+                // this only ever pulls one type's snapshots.
+                val result = OsrsRevisionSource(rev, cachePath, config.environment, null, null).use { source ->
+                    pipeline.withGameLock {
+                        writer.writeType(gameId, type.id, rev, null, source.snapshots(typeKey))
+                    }
+                }
+                entities = result.total
+                if (result.added + result.changed + result.removed > 0) changedRevs += rev
+                logger.info {
+                    "Re-ingest $typeKey rev $rev: total=${result.total} +${result.added} ~${result.changed} -${result.removed}"
+                }
+            } catch (e: Exception) {
+                // One unreadable cache should not abandon the other 200 revisions; the revision is
+                // recorded and the pass carries on, leaving a gap the operator can see.
+                logger.warn(e) { "Re-ingest $typeKey rev $rev failed" }
+                failed[rev] = e.message ?: e.javaClass.simpleName
+            } finally {
+                if (!keepCache) runCatching { rawCaches.delete(rev) }
+            }
+            done++
+            tick(rev, "WRITING", "Re-ingested $typeKey through rev $rev")
+        }
+
+        // The rows changed under revisions that are already published, so every cached view and
+        // every browser ETag has to be retired explicitly.
+        ingestRevisions.bumpPublishStamp(gameId)
+        catalog.invalidate()
+        tick(null, "PUBLISHING", "Refreshed caches for the rewritten $typeKey rows")
     }
 
     /**
@@ -158,6 +288,17 @@ class Platform(
                     .onFailure { logger.debug(it) { "Could not record ingest progress for run $runId" } }
             }
         }
+    }
+
+    /**
+     * XTEA keys come from the cache's OpenRS2 entry, so a link hosted elsewhere has none. Map
+     * locations then stay encrypted, which is worth saying out loud rather than ingesting a
+     * revision with a silently empty map.
+     */
+    private fun xteasFor(rev: Int, cacheId: Int?): Map<Int, IntArray>? {
+        if (cacheId != null) return downloadXteas(cacheId)
+        logger.warn { "rev $rev: no OpenRS2 cache id for this source, so no XTEA keys; map regions will not decode" }
+        return null
     }
 
     private fun downloadXteas(cacheId: Int): Map<Int, IntArray> {

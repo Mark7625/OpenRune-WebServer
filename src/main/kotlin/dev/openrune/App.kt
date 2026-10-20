@@ -11,6 +11,7 @@ import dev.openrune.cache.tools.OpenRS2
 import dev.openrune.db.DatabaseConfig
 import dev.openrune.ingest.IngestionProgress
 import dev.openrune.ingest.IngestionWorker
+import dev.openrune.ingest.TypeReingestRunner
 import dev.openrune.api.SseEventType
 import mu.KotlinLogging
 import java.io.File
@@ -51,6 +52,17 @@ class App(private val config: ServerConfig, dbConfig: DatabaseConfig) : AutoClos
         )
     } else null
 
+    /**
+     * Operator-triggered repair pass. Shares nothing with [worker] except the per-game advisory
+     * lock it takes around each revision, so a new release still imports while it runs.
+     */
+    private val reingest: TypeReingestRunner? = if (ingestEnabled) {
+        TypeReingestRunner { typeKey, from, report, isCancelled ->
+            platform.reingestType(typeKey, from, report, isCancelled)
+            onReingestFinished()
+        }
+    } else null
+
     private val zips: SpriteZipService = SpriteZipService(
         api,
         File(CachePathHelper.getDiffBinaryDirectory(config.gameType, config.environment).parentFile, "zips"),
@@ -58,7 +70,16 @@ class App(private val config: ServerConfig, dbConfig: DatabaseConfig) : AutoClos
 
     val server: ApiServer = ApiServer(
         api,
-        AdminContext(platform.db, platform.pipeline, worker, platform.discovery, envOrProp("OPENRUNE_ADMIN_TOKEN"), System.currentTimeMillis()),
+        AdminContext(
+            platform.db,
+            platform.pipeline,
+            worker,
+            platform.discovery,
+            envOrProp("OPENRUNE_ADMIN_TOKEN"),
+            System.currentTimeMillis(),
+            addManualRevision = if (ingestEnabled) platform::addManualRevision else null,
+            reingest = reingest,
+        ),
         zips,
     )
 
@@ -72,6 +93,12 @@ class App(private val config: ServerConfig, dbConfig: DatabaseConfig) : AutoClos
         if (api.ingestionProgress == null) hot.refresh()
         server.broadcast(SseEventType.STATUS, server.status())
     })
+
+    /** The rewritten rows sit under revisions that are already published, so re-warm and re-announce. */
+    private fun onReingestFinished() {
+        hot.refresh()
+        server.broadcast(SseEventType.STATUS, server.status())
+    }
 
     private fun onProgress(p: IngestionProgress) {
         api.ingestionProgress = if (p.stage == "READY" || p.stage == "FAILED") null else p
@@ -107,6 +134,7 @@ class App(private val config: ServerConfig, dbConfig: DatabaseConfig) : AutoClos
     override fun close() {
         ingestionWatch.close()
         hot.close()
+        reingest?.close()
         worker?.close()
         zips.close()
         server.stop()

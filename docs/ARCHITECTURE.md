@@ -192,6 +192,14 @@ DISCOVERED → DOWNLOADING → PROCESSING → IMPORTING → VALIDATING → READY
 
 * `RevisionDiscovery` polls `archive.openrs2.org/caches.json`, inserts `DISCOVERED` rows
   for new major revisions of the configured game.
+* A revision can also be filed by hand from a `disk.zip` link (`Platform.addManualRevision`,
+  `POST /admin/revisions/manual`, `ingestRevisions -PtoolArgs="url=..."`). Such a row carries
+  `source = 'manual'` and `source_url`, and `RawCacheStore.ensureFrom` downloads that URL instead
+  of asking OpenRS2 for a cache id. The worker ingests manual rows regardless of
+  `OPENRUNE_INGEST_MIN_REV`, because a pasted link is an explicit request rather than something
+  discovery dragged in. An OpenRS2 link still yields a cache id, which is what resolves the
+  revision number and fetches `keys.json`; a link hosted anywhere else needs an explicit revision
+  and decodes without XTEA keys.
 * `IngestionWorker` runs at most one ingestion per game (PostgreSQL advisory lock on
   `game_id`), on its own small thread pool, with its own connection pool, so API traffic
   never waits on it.
@@ -205,6 +213,16 @@ DISCOVERED → DOWNLOADING → PROCESSING → IMPORTING → VALIDATING → READY
   is the cache and ETag epoch.
 * `rollback(rev)` deletes rows with `ingest_rev = rev`, reopens rows with
   `closed_by_rev = rev` and clears the revision, so a failed run can be retried from scratch.
+* `Platform.reingestType(type, from)` (`POST /admin/reingest`, "Re-ingest textures" on the
+  ingestion page) rewrites **one entity type** across every published revision. It is the repair
+  path for a decoder that was wrong after the revisions were already imported: re-ingesting them
+  whole would rewrite correct data for hours, so this re-downloads one raw cache per revision and
+  writes only that type. `VersionWriter.deleteType` clears the type first — `writeType` merges
+  against what is stored, so stale rows would otherwise keep covering their revisions — and the
+  rebuild then runs ascending with `nextRev = null`, which is what keeps an unchanged entity on
+  one open range instead of one row per revision. It takes the per-game advisory lock around each
+  revision rather than the whole pass, so normal ingestion still runs, and it bumps
+  `publish_stamp` at the end because the rewritten rows sit under already published revisions.
 
 ### 2.5 API architecture
 

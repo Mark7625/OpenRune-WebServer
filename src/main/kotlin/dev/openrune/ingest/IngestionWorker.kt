@@ -62,7 +62,11 @@ class IngestionWorker(
 
     private fun nextPending(): RevisionRow? =
         repository.list(gameId).firstOrNull { r ->
-            r.rev >= minRevision && !r.published && (r.status == RevisionStatus.DISCOVERED || (r.status == RevisionStatus.FAILED && r.attempts < maxAttempts))
+            // minRevision bounds what discovery drags in from OpenRS2. A revision filed from a
+            // pasted link was asked for by name, so it is ingested whatever its number — that is
+            // the point of pasting a link to an old cache.
+            (r.rev >= minRevision || r.source == ManualCacheLink.SOURCE) && !r.published &&
+                (r.status == RevisionStatus.DISCOVERED || (r.status == RevisionStatus.FAILED && r.attempts < maxAttempts))
         }
 
     private fun run(rev: Int) {

@@ -203,7 +203,12 @@ class IngestionPipeline(
         },
     )
 
-    private fun <T> withGameLock(block: () -> T): T = dataSource.withConnection { c ->
+    /**
+     * Serialises writes for this game across the process and across deployments. Public so a
+     * repair pass can take the same lock per revision and interleave with normal ingestion
+     * instead of blocking it for the length of the pass.
+     */
+    fun <T> withGameLock(block: () -> T): T = dataSource.withConnection { c ->
         c.queryOne("SELECT pg_advisory_lock(?)", gameId.toLong()) { }
         try {
             block()
